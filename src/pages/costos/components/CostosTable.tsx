@@ -104,6 +104,9 @@ interface CostosTableProps {
   onAddFilaForProceso: (proceso: string) => void;
   onReorderColumns: (newOrder: CostoColumna[]) => void;
   formulaCtx?: FormulaContext;
+  /** Multiplicador global de simulación (persistido en Supabase) */
+  simMultiplier?: string;
+  onSimMultiplierChange?: (filaId: string, value: string) => void;
 }
 
 function getTypeIcon(tipo: string): string {
@@ -259,6 +262,8 @@ export default function CostosTable({
   onSaveRowFormula, onClearRowFormula, onAddFilaForProceso,
   onReorderColumns,
   formulaCtx,
+  simMultiplier,
+  onSimMultiplierChange,
 }: CostosTableProps) {
   const ctx = formulaCtx ?? EMPTY_FORMULA_CTX;
 
@@ -495,6 +500,8 @@ export default function CostosTable({
                     formulaCtx={ctx}
                     showTotal={columnas.length > 0}
                     frozenCols={frozenCols}
+                    simMultiplier={simMultiplier}
+                    onSimMultiplierChange={onSimMultiplierChange}
                   />
                 ))
               ) : (

@@ -221,7 +221,7 @@ function ReadOnlyRow({ fila, columnas, ctx, isFirst, isLast, hasCols, simMultipl
             <span className="text-sm font-bold text-teal-700 tabular-nums">
               {new Intl.NumberFormat('en-US', {
                 style: 'currency', currency: 'USD',
-                minimumFractionDigits: 2, maximumFractionDigits: 4,
+                minimumFractionDigits: 2, maximumFractionDigits: 2,
               }).format(rowTotal)}
             </span>
           </div>
@@ -272,7 +272,7 @@ function ReadOnlyRow({ fila, columnas, ctx, isFirst, isLast, hasCols, simMultipl
               <span className="text-sm font-bold text-orange-700 tabular-nums">
                 {new Intl.NumberFormat('en-US', {
                   style: 'currency', currency: 'USD',
-                  minimumFractionDigits: 2, maximumFractionDigits: 4,
+                  minimumFractionDigits: 2, maximumFractionDigits: 2,
                 }).format(simValue)}
               </span>
             </div>

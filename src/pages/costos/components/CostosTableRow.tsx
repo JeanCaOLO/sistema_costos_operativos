@@ -189,6 +189,9 @@ interface CostosTableRowProps {
   formulaCtx?: FormulaContext;
   showTotal?: boolean;
   frozenCols?: number;
+  /** Multiplicador de simulación controlado externamente */
+  simMultiplier?: string;
+  onSimMultiplierChange?: (filaId: string, value: string) => void;
 }
 
 interface EditingCell { field: string; value: string }
@@ -200,13 +203,25 @@ export default function CostosTableRow({
   onUpdate, onUpdateCell, onDelete,
   onSaveRowFormula, onClearRowFormula, onAddFilaForProceso,
   saving, formulaCtx, showTotal, frozenCols = 2,
+  simMultiplier: externalSimMultiplier,
+  onSimMultiplierChange,
 }: CostosTableRowProps) {
   const [editing, setEditing]               = useState<EditingCell | null>(null);
   const [hovered, setHovered]               = useState(false);
   const [showAreaDropdown, setShowAreaDropdown] = useState(false);
   const [formulaModalCol, setFormulaModalCol]   = useState<CostoColumna | null>(null);
-  const [simMultiplier, setSimMultiplier]       = useState<string>('1');
+  const [internalSimMultiplier, setInternalSimMultiplier] = useState<string>('1');
   const [editingSim, setEditingSim]             = useState(false);
+
+  // Usar multiplicador externo si se provee, si no usar interno
+  const simMultiplier = externalSimMultiplier ?? internalSimMultiplier;
+  const setSimMultiplier = (value: string) => {
+    if (onSimMultiplierChange) {
+      onSimMultiplierChange(fila.id, value);
+    } else {
+      setInternalSimMultiplier(value);
+    }
+  };
 
   const inputRef            = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
   const subprocesoTriggerRef = useRef<HTMLDivElement | null>(null);
@@ -566,7 +581,7 @@ export default function CostosTableRow({
               </div>
               <span className="text-sm font-bold text-teal-700 tabular-nums">
                 {new Intl.NumberFormat('en-US', {
-                  style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4,
+                  style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
                 }).format(getRowTotal(fila, columnas, ctx))}
               </span>
             </div>
@@ -624,7 +639,7 @@ export default function CostosTableRow({
                   </div>
                   <span className="text-sm font-bold text-orange-700 tabular-nums">
                     {new Intl.NumberFormat('en-US', {
-                      style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4,
+                      style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
                     }).format(simValue)}
                   </span>
                 </div>

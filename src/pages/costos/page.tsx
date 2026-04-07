@@ -31,6 +31,8 @@ export default function CostosPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [modalState, setModalState] = useState<ModalState>({ open: false });
   const [baseCtxData, setBaseCtxData] = useState<BaseCtxData | null>(null);
+  const [simMultiplier, setSimMultiplier] = useState<string>('1');
+  const [savingSim, setSavingSim] = useState(false);
 
   // Escuchar cambios en lastN de volúmenes para recalcular formulaCtx reactivamente
   const volLastN = useLocalStorageValue<VolPromedioConfig>(
