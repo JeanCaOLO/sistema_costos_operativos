@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { supabase } from '@/lib/supabase';
 import type { CostoColumna, CostoFila } from '@/types/costos';
 import type { Area } from '@/types/areas';
 import type { InversionRecord } from '@/types/inversion';
@@ -11,7 +12,6 @@ import CostosSummary from './components/CostosSummary';
 const EMBED_DATA_URL =
   'https://cqdupetgpzkvouslupfm.supabase.co/functions/v1/costos-embed-data';
 
-// ─── Datos crudos de Supabase (incluye lastN desde app_config) ───────────────
 interface RawSupabaseData {
   cols: CostoColumna[];
   rows: CostoFila[];
@@ -25,8 +25,8 @@ interface RawSupabaseData {
   empData: FormulaContext['manoObraEmpleados'];
   volColData: FormulaContext['volumenesColumnas'];
   volFilData: FormulaContext['volumenesFilas'];
-  // lastN viene del servidor (app_config en Supabase) — siempre correcto
   volLastN: VolPromedioConfig;
+  simMultiplier: number;
 }
 
 interface LoadState {
@@ -43,17 +43,10 @@ const INITIAL_LOAD_STATE: LoadState = {
   lastUpdated: null,
 };
 
-// ─── Construir FormulaContext + filas enriquecidas ────────────────────────────
-// IMPORTANTE: el lastN ya viene embebido en los datos del servidor,
-// por lo que buildVariableDefs usará readAllLastN() que lee localStorage.
-// Para garantizar consistencia, sincronizamos localStorage con el valor del servidor
-// antes de construir el contexto.
 function buildCtxFromRaw(raw: RawSupabaseData): {
   formulaCtx: FormulaContext;
   enrichedFilas: CostoFila[];
 } {
-  // Sincronizar localStorage con el valor del servidor para que
-  // readAllLastN() (usado por buildVariableDefs) devuelva el valor correcto
   try {
     localStorage.setItem('vol_promedio_lastN', JSON.stringify(raw.volLastN));
   } catch {
@@ -95,17 +88,22 @@ function buildCtxFromRaw(raw: RawSupabaseData): {
   return { formulaCtx, enrichedFilas };
 }
 
-// ─── Main embed page ──────────────────────────────────────────────────────────
 export default function CostosEmbedPage() {
   const [loadState, setLoadState] = useState<LoadState>(INITIAL_LOAD_STATE);
+  const [simMultiplier, setSimMultiplier] = useState<string>('1');
 
-  // Multiplicadores de simulación — viven fuera del ciclo loading
-  const [simMultipliers, setSimMultipliers] = useState<Record<string, string>>({});
-  const handleSimChange = (filaId: string, value: string) => {
-    setSimMultipliers(prev => ({ ...prev, [filaId]: value }));
-  };
+  // Guardar multiplicador en Supabase cuando cambia
+  const handleSimChange = useCallback(async (_filaId: string, value: string) => {
+    setSimMultiplier(value);
+    const numVal = parseFloat(value);
+    if (!isNaN(numVal)) {
+      await supabase
+        .from('app_config')
+        .update({ value: numVal })
+        .eq('key', 'sim_multiplier');
+    }
+  }, []);
 
-  // ── Cargar datos desde la edge function (incluye lastN desde Supabase) ────
   const loadData = useCallback(async () => {
     setLoadState((prev) => ({ ...prev, loading: true, error: null }));
 
@@ -124,18 +122,11 @@ export default function CostosEmbedPage() {
       if (payload.error) throw new Error(payload.error);
 
       const {
-        colData,
-        filData,
-        areasData: rawAreas,
-        invData,
-        gastosFilData,
-        areaDistribData,
-        moColData,
-        moFilData,
-        volColData,
-        volFilData,
-        empData,
+        colData, filData, areasData: rawAreas, invData,
+        gastosFilData, areaDistribData, moColData, moFilData,
+        volColData, volFilData, empData,
         volLastN: serverLastN,
+        simMultiplier: serverSimMultiplier,
       } = payload;
 
       const cols = (colData as CostoColumna[]) ?? [];
@@ -170,21 +161,22 @@ export default function CostosEmbedPage() {
       });
 
       const gastosColsFijos: FormulaContext['gastosColumnas'] = [
-        { id: 'mes',       nombre: 'Mes',          tipo: 'moneda' },
-        { id: 'ppto_mes',  nombre: 'Ppto Mes',     tipo: 'moneda' },
-        { id: 'psdo_mes',  nombre: 'Psdo Mes',     tipo: 'moneda' },
-        { id: 'acum',      nombre: 'Acumulado',    tipo: 'moneda' },
-        { id: 'ppto_acum', nombre: 'Ppto Acum',    tipo: 'moneda' },
-        { id: 'psdo_acum', nombre: 'Psdo Acum',    tipo: 'moneda' },
+        { id: 'mes',       nombre: 'Mes',       tipo: 'moneda' },
+        { id: 'ppto_mes',  nombre: 'Ppto Mes',  tipo: 'moneda' },
+        { id: 'psdo_mes',  nombre: 'Psdo Mes',  tipo: 'moneda' },
+        { id: 'acum',      nombre: 'Acumulado', tipo: 'moneda' },
+        { id: 'ppto_acum', nombre: 'Ppto Acum', tipo: 'moneda' },
+        { id: 'psdo_acum', nombre: 'Psdo Acum', tipo: 'moneda' },
       ];
 
-      // volLastN viene del servidor (app_config) — fuente de verdad
       const volLastN: VolPromedioConfig = serverLastN ?? { recibido: 0, despachado: 0 };
+      const serverMult = typeof serverSimMultiplier === 'number' ? serverSimMultiplier : 1;
+
+      // Sincronizar multiplicador desde servidor
+      setSimMultiplier(String(serverMult));
 
       const raw: RawSupabaseData = {
-        cols,
-        rows,
-        mappedAreas,
+        cols, rows, mappedAreas,
         enrichedAreaDist: enrichedAreaDist as FormulaContext['areaDistribucion'],
         inversiones: (invData as InversionRecord[]) ?? [],
         gastosColsFijos,
@@ -195,14 +187,10 @@ export default function CostosEmbedPage() {
         volColData: (volColData ?? []) as FormulaContext['volumenesColumnas'],
         volFilData: (volFilData ?? []) as FormulaContext['volumenesFilas'],
         volLastN,
+        simMultiplier: serverMult,
       };
 
-      setLoadState({
-        data: raw,
-        loading: false,
-        error: null,
-        lastUpdated: new Date(),
-      });
+      setLoadState({ data: raw, loading: false, error: null, lastUpdated: new Date() });
     } catch (err) {
       setLoadState((prev) => ({
         ...prev,
@@ -212,13 +200,8 @@ export default function CostosEmbedPage() {
     }
   }, []);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Reconstruir formulaCtx cada vez que cambian los datos del servidor ────
-  // El lastN ya viene incluido en raw.volLastN (desde Supabase),
-  // así que no necesitamos escuchar localStorage aquí.
   const derived = useMemo(() => {
     if (!loadState.data) return null;
     return buildCtxFromRaw(loadState.data);
@@ -229,10 +212,8 @@ export default function CostosEmbedPage() {
   const filas = derived?.enrichedFilas ?? [];
   const formulaCtx = derived?.formulaCtx ?? EMPTY_FORMULA_CTX;
   const volLastN = loadState.data?.volLastN ?? { recibido: 0, despachado: 0 };
-
   const isInitialLoad = loading && !loadState.data;
 
-  // ─── Pantalla de carga inicial ────────────────────────────────────────────
   if (isInitialLoad) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -265,9 +246,12 @@ export default function CostosEmbedPage() {
     );
   }
 
+  // Construir simMultipliers como Record para CostosTableReadOnly (un valor global para todas las filas)
+  const simMultipliers: Record<string, string> = {};
+  filas.forEach(f => { simMultipliers[f.id] = simMultiplier; });
+
   return (
     <div className="min-h-screen bg-slate-50" style={{ fontFamily: "'Inter', sans-serif" }}>
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-slate-200">
         <div className="px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -280,7 +264,6 @@ export default function CostosEmbedPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* Indicador del promedio activo (viene del servidor) */}
             {(volLastN.recibido > 0 || volLastN.despachado > 0) && (
               <span className="text-xs text-sky-600 bg-sky-50 border border-sky-200 px-2.5 py-1 rounded-full flex items-center gap-1.5 whitespace-nowrap">
                 <i className="ri-bar-chart-box-line" />
@@ -299,10 +282,7 @@ export default function CostosEmbedPage() {
               <span className="text-xs text-slate-400 hidden sm:block">
                 <i className="ri-refresh-line mr-1" />
                 Actualizado{' '}
-                {lastUpdated.toLocaleTimeString('es-MX', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
+                {lastUpdated.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
             {error && (
@@ -327,7 +307,6 @@ export default function CostosEmbedPage() {
         </div>
       </div>
 
-      {/* ── Content ─────────────────────────────────────────────────────────── */}
       <div className="px-6 py-6 space-y-6">
         {(filas.length > 0 || columnas.length > 0) && (
           <CostosSummary columnas={columnas} filas={filas} />

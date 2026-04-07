@@ -32,7 +32,7 @@ export default function CostosPage() {
   const [modalState, setModalState] = useState<ModalState>({ open: false });
   const [baseCtxData, setBaseCtxData] = useState<BaseCtxData | null>(null);
   const [simMultiplier, setSimMultiplier] = useState<string>('1');
-  const [savingSim, setSavingSim] = useState(false);
+  const [simMultiplierLoaded, setSimMultiplierLoaded] = useState(false);
 
   // Escuchar cambios en lastN de volúmenes para recalcular formulaCtx reactivamente
   const volLastN = useLocalStorageValue<VolPromedioConfig>(
@@ -156,6 +156,34 @@ export default function CostosPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // ── Cargar multiplicador de simulación desde Supabase ─────────────────────
+  useEffect(() => {
+    const fetchSimMultiplier = async () => {
+      const { data } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'sim_multiplier')
+        .maybeSingle();
+      if (data?.value !== undefined && data?.value !== null) {
+        setSimMultiplier(String(data.value));
+      }
+      setSimMultiplierLoaded(true);
+    };
+    fetchSimMultiplier();
+  }, []);
+
+  // ── Guardar multiplicador en Supabase cuando cambia ───────────────────────
+  const handleSimMultiplierChange = useCallback(async (value: string) => {
+    setSimMultiplier(value);
+    const numVal = parseFloat(value);
+    if (!isNaN(numVal)) {
+      await supabase
+        .from('app_config')
+        .update({ value: numVal })
+        .eq('key', 'sim_multiplier');
+    }
+  }, []);
 
   // ---------- COLUMNS ----------
   const handleSaveColumn = async (data: {
@@ -383,6 +411,8 @@ export default function CostosPage() {
           onAddFilaForProceso={handleAddFilaForProceso}
           onReorderColumns={handleReorderColumns}
           formulaCtx={formulaCtx}
+          simMultiplier={simMultiplierLoaded ? simMultiplier : '1'}
+          onSimMultiplierChange={handleSimMultiplierChange}
         />
 
         {modalState.open && (
