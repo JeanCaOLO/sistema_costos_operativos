@@ -7,6 +7,7 @@ import DistribucionPage from '@/pages/distribucion/page';
 import InversionPage from '@/pages/inversion/page';
 import CostosPage from '@/pages/costos/page';
 import CostosEmbedPage from '@/pages/costos/embed-page';
+import CotizacionesPage from '@/pages/cotizaciones/page';
 import ManoObraPage from '@/pages/mano-obra/page';
 import GastosVariosPage from '@/pages/gastos-varios/page';
 import VolumenesPage from '@/pages/volumenes/page';
@@ -21,6 +22,7 @@ const routes: RouteObject[] = [
   { path: '/distribucion', element: <ProtectedRoute moduleKey="distribucion"><DistribucionPage /></ProtectedRoute> },
   { path: '/inversion', element: <ProtectedRoute moduleKey="inversion"><InversionPage /></ProtectedRoute> },
   { path: '/costos', element: <ProtectedRoute moduleKey="costos"><CostosPage /></ProtectedRoute> },
+  { path: '/cotizaciones', element: <ProtectedRoute moduleKey="costos"><CotizacionesPage /></ProtectedRoute> },
   { path: '/mano-obra', element: <ProtectedRoute moduleKey="mano-obra"><ManoObraPage /></ProtectedRoute> },
   { path: '/gastos-varios', element: <ProtectedRoute moduleKey="gastos-varios"><GastosVariosPage /></ProtectedRoute> },
   { path: '/volumenes', element: <ProtectedRoute moduleKey="volumenes"><VolumenesPage /></ProtectedRoute> },
