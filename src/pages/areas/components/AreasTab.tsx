@@ -2,23 +2,33 @@ import { useState, Fragment } from 'react';
 import type { Area, TipoArea, Zona } from '../../../types/areas';
 import { TIPO_COLORS, formatMoneda } from '../../../types/areas';
 import AreaModal from './AreaModal';
+import type { FormulaContext } from '@/lib/formulaEngine';
+import { calcularFormula } from '@/lib/formulaEngine';
+import FormulaBuilder from '@/pages/costos/components/FormulaBuilder';
+import type { FormulaConfig } from '@/types/costos';
 
 interface AreasTabProps {
   areas: Area[];
   tipos: TipoArea[];
   zonas: Zona[];
+  formulaCtx: FormulaContext;
   onAdd: (area: Omit<Area, 'id' | 'created_at'>) => Promise<void>;
   onEdit: (id: string, area: Omit<Area, 'id' | 'created_at'>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
-function calcularCosto(area: Area, tipos: TipoArea[]): number | null {
+function calcularCosto(area: Area, tipos: TipoArea[], formulaCtx?: FormulaContext): number | null {
+  // Si tiene fórmula personalizada, calcularla
+  if (area.costo_area_formula && formulaCtx) {
+    return calcularFormula(area.costo_area_formula, formulaCtx, area.nombre);
+  }
+  // Fallback: costo por tipo de área × m²
   const tipo = tipos.find((t) => t.id === area.tipo_area_id);
   if (!tipo || tipo.costo_por_m2 <= 0 || area.metros_cuadrados <= 0) return null;
   return tipo.costo_por_m2 * area.metros_cuadrados;
 }
 
-export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete }: AreasTabProps) {
+export default function AreasTab({ areas, tipos, zonas, formulaCtx, onAdd, onEdit, onDelete }: AreasTabProps) {
   const [showModal, setShowModal] = useState(false);
   const [editingArea, setEditingArea] = useState<Area | null>(null);
   const [defaultParent, setDefaultParent] = useState<string | null>(null);
@@ -27,6 +37,9 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
   const [filterActivo, setFilterActivo] = useState('all');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Modal para editar fórmula de costo del área
+  const [formulaModalArea, setFormulaModalArea] = useState<Area | null>(null);
+  const [savingFormula, setSavingFormula] = useState(false);
 
   const topLevel = areas.filter((a) => a.parent_id === null);
   const getHijos = (parentId: string) => areas.filter((a) => a.parent_id === parentId);
@@ -50,8 +63,9 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
   });
 
   const totalM2 = areas.reduce((s, a) => s + (a.metros_cuadrados ?? 0), 0);
+  const totalM3 = areas.reduce((s, a) => s + (a.metros_cubicos ?? 0), 0);
   const totalCosto = areas.reduce((s, a) => {
-    const c = calcularCosto(a, tipos);
+    const c = calcularCosto(a, tipos, formulaCtx);
     return s + (c ?? 0);
   }, 0);
 
@@ -81,11 +95,39 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
     setShowModal(true);
   };
 
+  // Guardar fórmula de costo del área
+  const handleSaveAreaFormula = async (formula: FormulaConfig) => {
+    if (!formulaModalArea) return;
+    setSavingFormula(true);
+    // Calcular el costo con la fórmula para persistirlo también
+    const computedCosto = calcularFormula(formula, formulaCtx, formulaModalArea.nombre);
+    await onEdit(formulaModalArea.id, {
+      nombre: formulaModalArea.nombre,
+      tipo_area_id: formulaModalArea.tipo_area_id,
+      parent_id: formulaModalArea.parent_id,
+      zona_id: formulaModalArea.zona_id,
+      categoria: formulaModalArea.categoria,
+      metros_cuadrados: formulaModalArea.metros_cuadrados,
+      moneda: formulaModalArea.moneda,
+      descripcion: formulaModalArea.descripcion,
+      activo: formulaModalArea.activo,
+      tiene_automatizacion: formulaModalArea.tiene_automatizacion,
+      metros_automatizacion: formulaModalArea.metros_automatizacion,
+      cantidad_racks: formulaModalArea.cantidad_racks,
+      metros_cubicos: formulaModalArea.metros_cubicos,
+      costo_area: computedCosto > 0 ? computedCosto : formulaModalArea.costo_area,
+      costo_area_formula: formula,
+    });
+    setSavingFormula(false);
+    setFormulaModalArea(null);
+  };
+
   const renderRow = (area: Area, isChild = false) => {
     const tipo = getTipo(area.tipo_area_id);
     const zona = getZona(area.zona_id ?? null);
-    const costo = calcularCosto(area, tipos);
+    const costo = calcularCosto(area, tipos, formulaCtx);
     const monedaTipo = tipo?.moneda ?? 'USD';
+    const hasFormula = !!area.costo_area_formula;
 
     return (
       <tr key={area.id} className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${isChild ? 'bg-slate-50/30' : ''}`}>
@@ -101,6 +143,12 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 text-xs font-medium">
                     <i className="ri-robot-line text-xs" />
                     Auto
+                  </span>
+                )}
+                {hasFormula && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-600 text-xs font-medium">
+                    <i className="ri-function-line text-xs" />
+                    Fórmula
                   </span>
                 )}
               </div>
@@ -146,10 +194,25 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
           )}
         </td>
         <td className="px-5 py-3.5 text-right">
+          {area.metros_cubicos != null && area.metros_cubicos > 0 ? (
+            <span className="text-sm font-semibold text-slate-700">
+              {Number(area.metros_cubicos).toLocaleString()} m³
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400">—</span>
+          )}
+        </td>
+        <td className="px-5 py-3.5 text-right">
           {costo !== null ? (
             <div>
               <span className="text-sm font-semibold text-emerald-700">{formatMoneda(costo, monedaTipo)}</span>
               <span className="ml-1 text-xs text-slate-400">{monedaTipo}</span>
+              {hasFormula && (
+                <span className="ml-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-teal-50 text-teal-600 text-[10px] font-medium">
+                  <i className="ri-function-line" />
+                  Fórmula
+                </span>
+              )}
             </div>
           ) : (
             <span className="text-xs text-slate-400">—</span>
@@ -171,6 +234,13 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
                 <i className="ri-add-circle-line text-emerald-500 text-sm" />
               </button>
             )}
+            <button
+              onClick={() => setFormulaModalArea(area)}
+              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-teal-50 cursor-pointer"
+              title="Fórmula de costo"
+            >
+              <i className={`ri-function-line text-sm ${hasFormula ? 'text-teal-600' : 'text-slate-400'}`} />
+            </button>
             <button
               onClick={() => { setEditingArea(area); setShowModal(true); }}
               className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 cursor-pointer"
@@ -194,10 +264,11 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
   return (
     <div>
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
+      <div className="grid grid-cols-4 gap-4 mb-5">
         {[
           { label: 'Total de Áreas', value: `${areas.length}`, icon: 'ri-map-pin-2-line', color: 'text-emerald-600 bg-emerald-50' },
           { label: 'Total m²', value: `${totalM2.toLocaleString()} m²`, icon: 'ri-ruler-2-line', color: 'text-amber-600 bg-amber-50' },
+          { label: 'Total m³', value: `${totalM3.toLocaleString()} m³`, icon: 'ri-box-3-line', color: 'text-sky-600 bg-sky-50' },
           { label: 'Costo Total Calculado', value: totalCosto > 0 ? formatMoneda(totalCosto, 'USD') : '$0.00', icon: 'ri-calculator-line', color: 'text-slate-600 bg-slate-100' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-4">
@@ -262,6 +333,7 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Área</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Tipo</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Metros²</th>
+              <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Metros³</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Costo del Área</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Estado</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Acciones</th>
@@ -270,7 +342,7 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
           <tbody>
             {filteredTop.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center py-12 text-slate-400 text-sm">No se encontraron áreas</td>
+                <td colSpan={7} className="text-center py-12 text-slate-400 text-sm">No se encontraron áreas</td>
               </tr>
             ) : (
               filteredTop.map((area) => {
@@ -293,6 +365,9 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
                 <td className="px-5 py-3 text-right text-xs font-bold text-slate-700">
                   {totalM2.toLocaleString()} m²
                 </td>
+                <td className="px-5 py-3 text-right text-xs font-bold text-slate-700">
+                  {areas.reduce((s, a) => s + (a.metros_cubicos ?? 0), 0).toLocaleString()} m³
+                </td>
                 <td className="px-5 py-3 text-right text-xs font-bold text-emerald-700">
                   {totalCosto > 0 ? formatMoneda(totalCosto, 'USD') : '—'}
                 </td>
@@ -303,6 +378,7 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
         </table>
       </div>
 
+      {/* Area edit/create modal */}
       {showModal && (
         <AreaModal
           area={editingArea}
@@ -310,12 +386,14 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
           zonas={zonas}
           areas={areas}
           defaultParentId={defaultParent}
+          formulaCtx={formulaCtx}
           onClose={() => { setShowModal(false); setEditingArea(null); setDefaultParent(null); }}
           onSave={handleSave}
           saving={saving}
         />
       )}
 
+      {/* Delete confirm */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 max-w-sm w-full">
@@ -337,6 +415,77 @@ export default function AreasTab({ areas, tipos, zonas, onAdd, onEdit, onDelete 
               >
                 {saving ? 'Eliminando...' : 'Eliminar'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Formula modal for area cost */}
+      {formulaModalArea && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-3xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 shrink-0">
+              <div>
+                <h2 className="text-base font-bold text-slate-800">
+                  Fórmula de costo del área
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">{formulaModalArea.nombre}</p>
+              </div>
+              <button onClick={() => setFormulaModalArea(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 cursor-pointer">
+                <i className="ri-close-line text-slate-500" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="mb-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-600">
+                  <i className="ri-information-line mr-1 text-slate-400" />
+                  Definí una fórmula para calcular el costo de esta área. Podés usar todas las variables del sistema (inversiones, gastos varios, mano de obra, volúmenes, distribución de áreas, etc.).
+                  Si no definís fórmula, se usa el costo por m² del tipo de área.
+                </p>
+              </div>
+              <FormulaBuilder
+                config={formulaModalArea.costo_area_formula ?? { terminos: [], mode: 'expression', expression: '' }}
+                onChange={(config) => {
+                  // preview only — actual save on click
+                  if (!formulaModalArea) return;
+                  setFormulaModalArea({ ...formulaModalArea, costo_area_formula: config });
+                }}
+                ctx={formulaCtx}
+              />
+            </div>
+            <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between shrink-0">
+              <div>
+                {formulaModalArea.costo_area_formula && (
+                  <p className="text-xs text-slate-500">
+                    Vista previa:{' '}
+                    <span className="font-semibold text-emerald-700">
+                      {formatMoneda(calcularFormula(formulaModalArea.costo_area_formula, formulaCtx, formulaModalArea.nombre), 'USD')}
+                    </span>
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setFormulaModalArea(null)}
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => {
+                    if (!formulaModalArea?.costo_area_formula) {
+                      // Clear formula: save null
+                      handleSaveAreaFormula({ terminos: [], mode: 'expression', expression: '' });
+                    } else {
+                      handleSaveAreaFormula(formulaModalArea.costo_area_formula);
+                    }
+                  }}
+                  disabled={savingFormula}
+                  className="px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 cursor-pointer whitespace-nowrap transition-colors disabled:opacity-60"
+                >
+                  {savingFormula ? 'Guardando...' : 'Guardar Fórmula'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

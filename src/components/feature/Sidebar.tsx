@@ -12,6 +12,8 @@ const MODULE_PATHS: Record<string, string> = {
   'mano-obra': '/mano-obra',
   'gastos-varios': '/gastos-varios',
   volumenes: '/volumenes',
+  'vol-distribucion': '/vol-distribucion',
+  factores: '/factores',
   configuracion: '/configuracion',
 };
 
@@ -79,6 +81,8 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         {[
           ...visibleModules.filter((m) => m.key !== 'configuracion'),
           { key: 'cotizaciones', label: 'Cotizaciones', icon: 'ri-file-list-3-line' },
+          { key: 'vol-distribucion', label: 'Dist. Volumen', icon: 'ri-pie-chart-2-line' },
+          { key: 'factores', label: 'Factores', icon: 'ri-equalizer-line' },
         ].map((item) => {
             const path = MODULE_PATHS[item.key];
             const isActive =

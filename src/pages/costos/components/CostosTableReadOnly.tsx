@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import type { CostoColumna, CostoFila } from '@/types/costos';
-import { formatCellValue, getColumnTotal, COLUMN_TYPES } from '@/types/costos';
+import { formatCellValue, COLUMN_TYPES } from '@/types/costos';
 import type { FormulaContext } from '@/lib/formulaEngine';
 import { EMPTY_FORMULA_CTX, calcularFormula } from '@/lib/formulaEngine';
 
@@ -9,22 +8,19 @@ const COL_W_PROCESO  = 144;
 const COL_W_SUBPROC  = 160;
 const COL_W_DYNAMIC  = 160;
 const COL_W_TOTAL    = 150;
-const COL_W_SIM      = 200;
 
 const BG_HEADER = 'rgb(30,41,59)';
 const BG_WHITE  = '#ffffff';
-const BG_FOOT   = 'rgb(248,250,252)';
 const BG_VIOLET = 'rgb(245,243,255)';
 const BG_TEAL   = 'rgb(240,253,250)';
 const BORDER_ROW      = '1px solid rgb(241,245,249)';
-const BORDER_FOOT_T   = '2px solid rgb(226,232,240)';
 const BORDER_HEAD_COL = '1px solid rgb(51,65,85)';
 const BORDER_FREEZE   = '2px solid rgba(16,185,129,0.45)';
 const BORDER_PROC_DIV = '2px solid rgb(203,213,225)';
 const Z_HEAD        = 15;
-const Z_HEAD_STICKY = 20; // header cells that are also column-sticky
+const Z_HEAD_STICKY = 20;
 const Z_BODY        = 3;
-const FROZEN        = 2; // Proceso + Subproceso always frozen
+const FROZEN        = 2;
 
 const PROCESO_BORDER_COLOR: Record<string, string> = {
   'Inbound':           '#10b981',
@@ -65,18 +61,6 @@ function stickyStyle(i: number, bg: string, z: number): React.CSSProperties {
   };
 }
 
-function getFormulaColumnTotal(filas: CostoFila[], col: CostoColumna, ctx: FormulaContext): number {
-  return filas.reduce((sum, fila) => {
-    const f    = fila.formulas?.[col.id] ?? col.formula;
-    if (!f) return sum;
-    const mode = f.mode ?? 'terms';
-    const has  =
-      (mode === 'expression' && !!f.expression?.trim()) ||
-      (mode === 'terms' && (f.terminos?.length ?? 0) > 0);
-    return has ? sum + calcularFormula(f, ctx, fila.subproceso) : sum;
-  }, 0);
-}
-
 function getRowTotal(fila: CostoFila, columnas: CostoColumna[], ctx: FormulaContext): number {
   return columnas.reduce((sum, col) => {
     if (col.tipo === 'texto' || col.tipo === 'select') return sum;
@@ -94,7 +78,7 @@ function getRowTotal(fila: CostoFila, columnas: CostoColumna[], ctx: FormulaCont
   }, 0);
 }
 
-// ─── Read-only row with lifted simulation state ───────────────────────────────
+// ─── Read-only row ──────────────────────────────────────────────────────────
 interface ReadOnlyRowProps {
   fila: CostoFila;
   columnas: CostoColumna[];
@@ -102,18 +86,12 @@ interface ReadOnlyRowProps {
   isFirst: boolean;
   isLast: boolean;
   hasCols: boolean;
-  simMultiplier: string;
-  onSimMultiplierChange: (value: string) => void;
 }
 
-function ReadOnlyRow({ fila, columnas, ctx, isFirst, isLast, hasCols, simMultiplier, onSimMultiplierChange }: ReadOnlyRowProps) {
-  const [editingSim, setEditingSim] = useState(false);
-
+function ReadOnlyRow({ fila, columnas, ctx, isFirst, isLast, hasCols }: ReadOnlyRowProps) {
   const rowBorder   = isLast ? BORDER_PROC_DIV : BORDER_ROW;
   const accentColor = getProcesoColor(fila.proceso);
   const rowTotal    = getRowTotal(fila, columnas, ctx);
-  const mult        = parseFloat(simMultiplier) || 0;
-  const simValue    = rowTotal * mult;
 
   return (
     <tr>
@@ -227,58 +205,6 @@ function ReadOnlyRow({ fila, columnas, ctx, isFirst, isLast, hasCols, simMultipl
           </div>
         </td>
       )}
-
-      {/* Simulación */}
-      {hasCols && (
-        <td
-          style={{
-            width: COL_W_SIM, minWidth: COL_W_SIM,
-            borderRight: BORDER_ROW, borderBottom: rowBorder,
-            backgroundColor: 'rgb(255,251,245)', padding: '10px 16px',
-          }}
-        >
-          <div className="flex flex-col gap-1">
-            {/* Multiplier input */}
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 flex items-center justify-center flex-shrink-0">
-                <i className="ri-close-line text-xs text-orange-400" />
-              </div>
-              {editingSim ? (
-                <input
-                  type="number"
-                  value={simMultiplier}
-                  onChange={e => onSimMultiplierChange(e.target.value)}
-                  onBlur={() => setEditingSim(false)}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditingSim(false); }}
-                  autoFocus
-                  className="w-20 bg-white border border-orange-300 rounded px-2 py-0.5 text-xs focus:outline-none text-right tabular-nums"
-                  step="any"
-                />
-              ) : (
-                <span
-                  className="text-xs text-orange-500 font-semibold tabular-nums cursor-pointer hover:text-orange-700 hover:underline"
-                  title="Clic para editar multiplicador"
-                  onClick={() => setEditingSim(true)}
-                >
-                  ×{simMultiplier}
-                </span>
-              )}
-            </div>
-            {/* Result */}
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 flex items-center justify-center flex-shrink-0">
-                <i className="ri-bar-chart-2-line text-xs text-orange-400" />
-              </div>
-              <span className="text-sm font-bold text-orange-700 tabular-nums">
-                {new Intl.NumberFormat('en-US', {
-                  style: 'currency', currency: 'USD',
-                  minimumFractionDigits: 2, maximumFractionDigits: 2,
-                }).format(simValue)}
-              </span>
-            </div>
-          </div>
-        </td>
-      )}
     </tr>
   );
 }
@@ -287,24 +213,10 @@ interface Props {
   columnas: CostoColumna[];
   filas: CostoFila[];
   formulaCtx?: FormulaContext;
-  simMultipliers?: Record<string, string>;
-  onSimMultiplierChange?: (filaId: string, value: string) => void;
 }
 
-export default function CostosTableReadOnly({ columnas, filas, formulaCtx, simMultipliers: externalMultipliers, onSimMultiplierChange: externalOnChange }: Props) {
+export default function CostosTableReadOnly({ columnas, filas, formulaCtx }: Props) {
   const ctx = formulaCtx ?? EMPTY_FORMULA_CTX;
-
-  // Si se pasan multiplicadores externos (desde embed-page) los usamos,
-  // si no (uso standalone) manejamos estado interno como fallback
-  const [internalMultipliers, setInternalMultipliers] = useState<Record<string, string>>({});
-  const simMultipliers = externalMultipliers ?? internalMultipliers;
-  const handleSimChange = (filaId: string, value: string) => {
-    if (externalOnChange) {
-      externalOnChange(filaId, value);
-    } else {
-      setInternalMultipliers(prev => ({ ...prev, [filaId]: value }));
-    }
-  };
 
   const firstOfProceso = new Set<string>();
   const lastOfProceso  = new Set<string>();
@@ -317,7 +229,7 @@ export default function CostosTableReadOnly({ columnas, filas, formulaCtx, simMu
 
   const hasData    = filas.length > 0;
   const hasCols    = columnas.length > 0;
-  const tableMinW  = COL_W_PROCESO + COL_W_SUBPROC + columnas.length * COL_W_DYNAMIC + (hasCols ? COL_W_TOTAL + COL_W_SIM : 0);
+  const tableMinW  = COL_W_PROCESO + COL_W_SUBPROC + columnas.length * COL_W_DYNAMIC + (hasCols ? COL_W_TOTAL : 0);
 
   const headCell = (i: number, bg?: string): React.CSSProperties => {
     const z = i < FROZEN ? Z_HEAD_STICKY : Z_HEAD;
@@ -412,28 +324,6 @@ export default function CostosTableReadOnly({ columnas, filas, formulaCtx, simMu
                   </div>
                 </th>
               )}
-
-              {/* Simulación */}
-              {hasCols && (
-                <th
-                  className="px-4 py-3.5 text-left"
-                  style={{
-                    backgroundColor: 'rgb(67,20,7)',
-                    minWidth: COL_W_SIM,
-                    width: COL_W_SIM,
-                    borderRight: BORDER_HEAD_COL,
-                    borderBottom: BORDER_HEAD_COL,
-                  }}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-4 h-4 flex items-center justify-center">
-                      <i className="ri-bar-chart-2-line text-xs text-orange-400" />
-                    </div>
-                    <span className="text-xs font-bold text-orange-300 uppercase tracking-wider">Simulación</span>
-                  </div>
-                  <p className="text-xs text-orange-500/70 mt-0.5 font-normal normal-case tracking-normal">Total × multiplicador</p>
-                </th>
-              )}
             </tr>
           </thead>
 
@@ -448,8 +338,6 @@ export default function CostosTableReadOnly({ columnas, filas, formulaCtx, simMu
                 isFirst={firstOfProceso.has(fila.id)}
                 isLast={lastOfProceso.has(fila.id)}
                 hasCols={hasCols}
-                simMultiplier={simMultipliers[fila.id] ?? '1'}
-                onSimMultiplierChange={(v) => handleSimChange(fila.id, v)}
               />
             )) : (
               <tr>
@@ -464,7 +352,6 @@ export default function CostosTableReadOnly({ columnas, filas, formulaCtx, simMu
               </tr>
             )}
           </tbody>
-
 
         </table>
       </div>

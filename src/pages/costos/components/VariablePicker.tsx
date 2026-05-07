@@ -8,7 +8,7 @@ interface VariablePickerProps {
   onInsert: (token: string) => void;
 }
 
-const GROUP_ORDER: VarGroup[] = ['inversiones', 'gastos_varios', 'mano_obra', 'volumenes', 'costos', 'distribucion', 'areas'];
+const GROUP_ORDER: VarGroup[] = ['inversiones', 'gastos_varios', 'mano_obra', 'volumenes', 'costos', 'distribucion', 'distribucion_cubica', 'vol_distribucion', 'areas', 'factores'];
 
 function fmt(n: number): string {
   if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -76,11 +76,53 @@ function filterByMoSubGroup(defs: VariableDef[], sub: MoSubGroup): VariableDef[]
   return defs.filter(d => d.token.startsWith(found.prefix!));
 }
 
+// ── Sub-group definitions for Vol. Distribución ────────────────────────────
+type VolDistSubGroup = 'todos' | 'inbound' | 'outbound' | 'total';
+
+const VOLDIST_SUBGROUPS: { id: VolDistSubGroup; label: string; icon: string; color: string }[] = [
+  { id: 'todos',    label: 'Todos',        icon: 'ri-apps-line',              color: 'teal'    },
+  { id: 'inbound',  label: 'Inbound',      icon: 'ri-arrow-down-circle-line', color: 'emerald' },
+  { id: 'outbound', label: 'Outbound',     icon: 'ri-arrow-up-circle-line',   color: 'sky'     },
+  { id: 'total',    label: 'Total IN+OUT', icon: 'ri-pie-chart-2-line',       color: 'amber'   },
+];
+
+// Tokens de inbound individual (% dentro de inbound, no del total combinado)
+const INBOUND_DIRECT_TOKENS = new Set([
+  'VOLDIST_INBOUND_TOTAL',
+  'VOLDIST_RECIBO_NACIONALIZADO',
+  'VOLDIST_RECIBO_NO_NACIONALIZADO',
+  'VOLDIST_RECIBO_PESADO',
+]);
+
+// Tokens de outbound individual
+const OUTBOUND_DIRECT_TOKENS = new Set([
+  'VOLDIST_OUTBOUND_TOTAL',
+  'VOLDIST_DESPACHO_NACIONALIZADO',
+  'VOLDIST_DESPACHO_NO_NACIONALIZADO',
+  'VOLDIST_DESPACHO_MENUDENCIA',
+  'VOLDIST_DESPACHO_PESADO',
+]);
+
+function filterByVolDistSubGroup(defs: VariableDef[], sub: VolDistSubGroup): VariableDef[] {
+  switch (sub) {
+    case 'todos':    return defs;
+    case 'inbound':  return defs.filter(d =>
+      d.token.startsWith('VOLDIST_IN_') || INBOUND_DIRECT_TOKENS.has(d.token)
+    );
+    case 'outbound': return defs.filter(d =>
+      d.token.startsWith('VOLDIST_OUT_') || OUTBOUND_DIRECT_TOKENS.has(d.token)
+    );
+    case 'total':    return defs.filter(d => d.token.startsWith('VOLDIST_TOTAL_'));
+    default:         return defs;
+  }
+}
+
 export default function VariablePicker({ defs, varMap, onInsert }: VariablePickerProps) {
   const [activeGroup, setActiveGroup] = useState<VarGroup>(GROUP_ORDER[0]);
   const [search, setSearch] = useState('');
   const [moSubGroup, setMoSubGroup] = useState<MoSubGroup>('todos');
   const [volSubGroup, setVolSubGroup] = useState<VolSubGroup>('todos');
+  const [volDistSubGroup, setVolDistSubGroup] = useState<VolDistSubGroup>('todos');
 
   const grouped = useMemo(() => {
     const map: Partial<Record<VarGroup, VariableDef[]>> = {};
@@ -121,6 +163,18 @@ export default function VariablePicker({ defs, varMap, onInsert }: VariablePicke
     return counts;
   }, [grouped]);
 
+  // Sub-group counts for vol_distribucion
+  const volDistSubGroupCounts = useMemo(() => {
+    const vdDefs = grouped['vol_distribucion'] ?? [];
+    const counts: Record<VolDistSubGroup, number> = { todos: vdDefs.length, inbound: 0, outbound: 0, total: 0 };
+    vdDefs.forEach(d => {
+      if (d.token.startsWith('VOLDIST_TOTAL_'))                                        counts.total++;
+      else if (d.token.startsWith('VOLDIST_IN_') || INBOUND_DIRECT_TOKENS.has(d.token))  counts.inbound++;
+      else if (d.token.startsWith('VOLDIST_OUT_') || OUTBOUND_DIRECT_TOKENS.has(d.token)) counts.outbound++;
+    });
+    return counts;
+  }, [grouped]);
+
   const filteredDefs = useMemo(() => {
     if (search.trim()) {
       return defs.filter(d =>
@@ -135,8 +189,11 @@ export default function VariablePicker({ defs, varMap, onInsert }: VariablePicke
     if (activeGroup === 'volumenes') {
       return filterByVolSubGroup(groupDefs, volSubGroup);
     }
+    if (activeGroup === 'vol_distribucion') {
+      return filterByVolDistSubGroup(groupDefs, volDistSubGroup);
+    }
     return groupDefs;
-  }, [defs, search, activeGroup, grouped, moSubGroup, volSubGroup]);
+  }, [defs, search, activeGroup, grouped, moSubGroup, volSubGroup, volDistSubGroup]);
 
   const activeGroupMeta = GROUP_META[activeGroup];
 
@@ -172,7 +229,7 @@ export default function VariablePicker({ defs, varMap, onInsert }: VariablePicke
             return (
               <button
                 key={g}
-                onClick={() => { setActiveGroup(g); setMoSubGroup('todos'); setVolSubGroup('todos'); }}
+                onClick={() => { setActiveGroup(g); setMoSubGroup('todos'); setVolSubGroup('todos'); setVolDistSubGroup('todos'); }}
                 title={meta.label}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
                   isActive
@@ -322,6 +379,40 @@ export default function VariablePicker({ defs, varMap, onInsert }: VariablePicke
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Vol. Distribución sub-group pills ─────────────────────────── */}
+      {!search && activeGroup === 'vol_distribucion' && (
+        <div className="px-3 pb-2 flex-shrink-0">
+          <div className="flex gap-1 flex-wrap">
+            {VOLDIST_SUBGROUPS.map(sg => {
+              const count = volDistSubGroupCounts[sg.id];
+              if (sg.id !== 'todos' && count === 0) return null;
+              const isActive = volDistSubGroup === sg.id;
+              const colorMap: Record<string, string> = {
+                teal:    isActive ? 'bg-teal-500 text-white'    : 'bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200',
+                emerald: isActive ? 'bg-emerald-500 text-white' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200',
+                sky:     isActive ? 'bg-sky-500 text-white'     : 'bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200',
+                amber:   isActive ? 'bg-amber-500 text-white'   : 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200',
+              };
+              const cls = colorMap[sg.color] ?? colorMap.teal;
+              const countCls = isActive ? 'opacity-75' : 'opacity-60';
+              return (
+                <button
+                  key={sg.id}
+                  onClick={() => setVolDistSubGroup(sg.id)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${cls}`}
+                >
+                  <div className="w-3 h-3 flex items-center justify-center">
+                    <i className={sg.icon} />
+                  </div>
+                  {sg.label}
+                  <span className={`ml-0.5 text-xs tabular-nums ${countCls}`}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

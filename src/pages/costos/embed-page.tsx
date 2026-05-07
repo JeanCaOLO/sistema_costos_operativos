@@ -26,7 +26,6 @@ interface RawSupabaseData {
   volColData: FormulaContext['volumenesColumnas'];
   volFilData: FormulaContext['volumenesFilas'];
   volLastN: VolPromedioConfig;
-  simMultiplier: number;
 }
 
 interface LoadState {
@@ -90,19 +89,6 @@ function buildCtxFromRaw(raw: RawSupabaseData): {
 
 export default function CostosEmbedPage() {
   const [loadState, setLoadState] = useState<LoadState>(INITIAL_LOAD_STATE);
-  const [simMultiplier, setSimMultiplier] = useState<string>('1');
-
-  // Guardar multiplicador en Supabase cuando cambia
-  const handleSimChange = useCallback(async (_filaId: string, value: string) => {
-    setSimMultiplier(value);
-    const numVal = parseFloat(value);
-    if (!isNaN(numVal)) {
-      await supabase
-        .from('app_config')
-        .update({ value: numVal })
-        .eq('key', 'sim_multiplier');
-    }
-  }, []);
 
   const loadData = useCallback(async () => {
     setLoadState((prev) => ({ ...prev, loading: true, error: null }));
@@ -126,7 +112,6 @@ export default function CostosEmbedPage() {
         gastosFilData, areaDistribData, moColData, moFilData,
         volColData, volFilData, empData,
         volLastN: serverLastN,
-        simMultiplier: serverSimMultiplier,
       } = payload;
 
       const cols = (colData as CostoColumna[]) ?? [];
@@ -170,10 +155,6 @@ export default function CostosEmbedPage() {
       ];
 
       const volLastN: VolPromedioConfig = serverLastN ?? { recibido: 0, despachado: 0 };
-      const serverMult = typeof serverSimMultiplier === 'number' ? serverSimMultiplier : 1;
-
-      // Sincronizar multiplicador desde servidor
-      setSimMultiplier(String(serverMult));
 
       const raw: RawSupabaseData = {
         cols, rows, mappedAreas,
@@ -187,7 +168,6 @@ export default function CostosEmbedPage() {
         volColData: (volColData ?? []) as FormulaContext['volumenesColumnas'],
         volFilData: (volFilData ?? []) as FormulaContext['volumenesFilas'],
         volLastN,
-        simMultiplier: serverMult,
       };
 
       setLoadState({ data: raw, loading: false, error: null, lastUpdated: new Date() });
@@ -245,10 +225,6 @@ export default function CostosEmbedPage() {
       </div>
     );
   }
-
-  // Construir simMultipliers como Record para CostosTableReadOnly (un valor global para todas las filas)
-  const simMultipliers: Record<string, string> = {};
-  filas.forEach(f => { simMultipliers[f.id] = simMultiplier; });
 
   return (
     <div className="min-h-screen bg-slate-50" style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -315,8 +291,6 @@ export default function CostosEmbedPage() {
           columnas={columnas}
           filas={filas}
           formulaCtx={formulaCtx}
-          simMultipliers={simMultipliers}
-          onSimMultiplierChange={handleSimChange}
         />
       </div>
     </div>

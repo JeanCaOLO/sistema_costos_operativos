@@ -77,3 +77,75 @@ Aplicación web de gestión de costos operativos que permite registrar gastos me
 ### Fase 5: Exportación de Datos
 - Objetivo: Exportar reportes en CSV y PDF
 - Entregable: Página de exportación con filtros y descarga
+
+## 7. Módulo de Cotizaciones v2 — Arquitectura
+
+### Modelo de datos (Supabase)
+
+#### cotizacion_cabecera
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid PK | |
+| cliente | text | Nombre del cliente |
+| mes | int | 1–12 |
+| anio | int | Año |
+| version | int | Versión (1, 2, 3...) |
+| estado | text | borrador / vigente / cerrada / historica |
+| moneda | text | USD, COP, EUR... |
+| total_general | numeric | Calculado y guardado |
+| notas | text | Observaciones |
+| created_at / updated_at | timestamptz | |
+| created_by | uuid → auth.users | |
+
+#### cotizacion_detalle
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid PK | |
+| cabecera_id | uuid FK | |
+| proceso / subproceso | text | |
+| costo_base | numeric | Calculado desde costos_operacion |
+| multiplicador_base | numeric | Multiplicador por fila |
+| total_final | numeric | costo_base × multiplicador_base |
+| orden | int | |
+| costo_fila_id | uuid | Referencia a costos_operacion |
+
+#### cotizacion_columnas_dinamicas
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid PK | |
+| name / key | text | Nombre y clave única |
+| data_type | text | number / percent / currency / text / formula |
+| effect_type | text | add / subtract / multiply / display_only / formula |
+| applies_to | text | all / process / subprocess |
+| formula_expression | text nullable | |
+| is_editable / is_visible / is_active | bool | |
+| sort_order | int | |
+
+#### cotizacion_valores_dinamicos
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid PK | |
+| detalle_id | uuid FK | |
+| columna_id | uuid FK | |
+| raw_value | text | Valor ingresado |
+| computed_value | numeric | Valor calculado |
+
+### Fases de implementación
+
+#### Fase A ✅ — Base de datos + UI principal
+- Tablas creadas con RLS
+- Sidebar con historial agrupado por cliente/período
+- Tabla de detalles con columnas dinámicas
+- Modal nueva cotización (cliente, mes, año, versión, moneda, estado)
+- Modal duplicar cotización (copia detalles + valores dinámicos)
+- Modal admin columnas dinámicas (CRUD)
+- Vista comparativa entre períodos
+
+#### Fase B — Motor de cálculo avanzado + exportación
+- Motor de fórmulas para columnas dinámicas
+- Exportación PDF con columnas dinámicas
+- Exportación Excel
+
+#### Fase C — Auditoría + historial de cambios
+- Log de cambios por cotización
+- Trazabilidad de versiones

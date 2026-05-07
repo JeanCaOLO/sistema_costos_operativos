@@ -104,9 +104,6 @@ interface CostosTableProps {
   onAddFilaForProceso: (proceso: string) => void;
   onReorderColumns: (newOrder: CostoColumna[]) => void;
   formulaCtx?: FormulaContext;
-  /** Multiplicador global de simulación (persistido en Supabase) */
-  simMultiplier?: string;
-  onSimMultiplierChange?: (filaId: string, value: string) => void;
 }
 
 function getTypeIcon(tipo: string): string {
@@ -262,8 +259,6 @@ export default function CostosTable({
   onSaveRowFormula, onClearRowFormula, onAddFilaForProceso,
   onReorderColumns,
   formulaCtx,
-  simMultiplier,
-  onSimMultiplierChange,
 }: CostosTableProps) {
   const ctx = formulaCtx ?? EMPTY_FORMULA_CTX;
 
@@ -315,7 +310,7 @@ export default function CostosTable({
   const hasData   = filas.length > 0;
   const tableMinW = COL_W_PROCESO + COL_W_SUBPROC
     + columnas.length * COL_W_DYNAMIC
-    + (columnas.length > 0 ? COL_W_TOTAL + COL_W_SIM : 0)
+    + (columnas.length > 0 ? COL_W_TOTAL : 0)
     + COL_W_ADD;
 
   const headCellStyle = (ci: number, bgOverride?: string): React.CSSProperties => {
@@ -442,28 +437,6 @@ export default function CostosTable({
                   </th>
                 )}
 
-                {/* ── Simulación ── */}
-                {columnas.length > 0 && (
-                  <th
-                    className="px-4 py-3.5 text-left"
-                    style={{
-                      backgroundColor: 'rgb(67,20,7)',
-                      minWidth: COL_W_SIM,
-                      width: COL_W_SIM,
-                      borderRight: BORDER_HEAD_COL,
-                      borderBottom: BORDER_HEAD_COL,
-                    }}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-4 h-4 flex items-center justify-center">
-                        <i className="ri-bar-chart-2-line text-xs text-orange-400" />
-                      </div>
-                      <span className="text-xs font-bold text-orange-300 uppercase tracking-wider">Simulación</span>
-                    </div>
-                    <p className="text-xs text-orange-500/70 mt-0.5 font-normal normal-case tracking-normal">Total × multiplicador</p>
-                  </th>
-                )}
-
                 {/* ── + add column ── */}
                 <th
                   className="px-3 py-3.5"
@@ -500,8 +473,6 @@ export default function CostosTable({
                     formulaCtx={ctx}
                     showTotal={columnas.length > 0}
                     frozenCols={frozenCols}
-                    simMultiplier={simMultiplier}
-                    onSimMultiplierChange={onSimMultiplierChange}
                   />
                 ))
               ) : (

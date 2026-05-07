@@ -31,8 +31,6 @@ export default function CostosPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [modalState, setModalState] = useState<ModalState>({ open: false });
   const [baseCtxData, setBaseCtxData] = useState<BaseCtxData | null>(null);
-  const [simMultiplier, setSimMultiplier] = useState<string>('1');
-  const [simMultiplierLoaded, setSimMultiplierLoaded] = useState(false);
 
   // Escuchar cambios en lastN de volúmenes para recalcular formulaCtx reactivamente
   const volLastN = useLocalStorageValue<VolPromedioConfig>(
@@ -85,10 +83,12 @@ export default function CostosPage() {
       { data: volColData },
       { data: volFilData },
       { data: empData },
+      { data: volDistData },
+      { data: factoresData },
     ] = await Promise.all([
       supabase.from('costos_columnas').select('*').order('orden'),
       supabase.from('costos_operacion').select('*').order('orden'),
-      supabase.from('areas').select('id, nombre, metros_cuadrados, cantidad_racks, categoria').order('nombre'),
+      supabase.from('areas').select('id, nombre, metros_cuadrados, cantidad_racks, metros_cubicos, categoria, costo_area, costo_area_formula').order('nombre'),
       supabase.from('inversiones').select('*').order('created_at'),
       supabase.from('gastos_varios_columnas').select('id, nombre, tipo').order('orden'),
       supabase.from('gastos_varios').select('id, area, concepto, parent_id, es_total, tipo_fila, valores'),
@@ -98,6 +98,8 @@ export default function CostosPage() {
       supabase.from('volumenes_columnas').select('id, nombre, tipo').order('orden'),
       supabase.from('volumenes').select('id, proceso, subproceso, valores'),
       supabase.from('mano_obra_empleados').select('*').eq('is_active', true),
+      supabase.from('volumen_distribucion').select('id, nombre, porcentaje, porcentaje_inbound, porcentaje_outbound, categoria, is_active, unidades').eq('is_active', true).order('orden'),
+      supabase.from('factores').select('*'),
     ]);
 
     const cols = (colData as CostoColumna[]) ?? [];
@@ -106,32 +108,73 @@ export default function CostosPage() {
     setFilas(rows);
     setAreas((areasData as Area[]) ?? []);
 
-    const mappedAreasData = ((areasData ?? []) as Area[]).map(a => ({
+    let mappedAreasData = ((areasData ?? []) as Area[]).map(a => ({
       nombre: a.nombre,
       metros_cuadrados: a.metros_cuadrados ?? 0,
       cantidad_racks: a.cantidad_racks ?? 0,
+      metros_cubicos: a.metros_cubicos ?? 0,
+      costo_area: a.costo_area ?? 0,
     }));
 
-    // ── Enrich areaDistribucion with categoria + category_distribution_percentage ──
+    // ── Enrich areaDistribucion with categoria + category_distribution_percentage (m²) ──
     const areasWithCat = ((areasData ?? []) as Area[]);
     const categoryTotals: Record<string, number> = {};
+    const categoryTotalsCubic: Record<string, number> = {};
+    let totalM3Global = 0;
     areasWithCat.forEach(a => {
       const cat = a.categoria ?? 'Sin categoría';
       categoryTotals[cat] = (categoryTotals[cat] ?? 0) + (a.metros_cuadrados ?? 0);
+      categoryTotalsCubic[cat] = (categoryTotalsCubic[cat] ?? 0) + (a.metros_cubicos ?? 0);
+      totalM3Global += a.metros_cubicos ?? 0;
     });
 
     const enrichedAreaDist = ((areaDistribData ?? []) as { area_name: string; global_distribution_percentage: number }[]).map(d => {
       const match = areasWithCat.find(a => a.nombre === d.area_name);
       const cat = match?.categoria ?? 'Sin categoría';
       const areaM2 = match?.metros_cuadrados ?? 0;
+      const areaM3 = match?.metros_cubicos ?? 0;
       const catTotal = categoryTotals[cat] ?? 0;
+      const catTotalCubic = categoryTotalsCubic[cat] ?? 0;
       const catPct = catTotal > 0 ? (areaM2 / catTotal) * 100 : 0;
+      const catPctCubic = catTotalCubic > 0 ? (areaM3 / catTotalCubic) * 100 : 0;
+      const globalCubicPct = totalM3Global > 0 ? (areaM3 / totalM3Global) * 100 : 0;
       return {
         ...d,
         categoria: cat,
         category_distribution_percentage: +catPct.toFixed(2),
+        global_distribution_cubic_percentage: +globalCubicPct.toFixed(2),
+        category_distribution_cubic_percentage: +catPctCubic.toFixed(2),
       };
     });
+
+    // ── Compute costo_area for each area using its formula ──
+    const areasWithFormula = ((areasData ?? []) as Area[]);
+    for (let i = 0; i < mappedAreasData.length; i++) {
+      const areaRecord = areasWithFormula.find(ar => ar.nombre === mappedAreasData[i].nombre);
+      if (areaRecord?.costo_area_formula) {
+        mappedAreasData[i].costo_area = calcularFormula(
+          areaRecord.costo_area_formula,
+          {
+            inversiones: (invData as InversionRecord[]) ?? [],
+            gastosColumnas: (gastosColData ?? []) as FormulaContext['gastosColumnas'],
+            gastosFilas: (gastosFilData ?? []) as FormulaContext['gastosFilas'],
+            areaDistribucion: enrichedAreaDist as FormulaContext['areaDistribucion'],
+            manoObraColumnas: (moColData ?? []) as FormulaContext['manoObraColumnas'],
+            manoObraFilas: (moFilData ?? []) as FormulaContext['manoObraFilas'],
+            manoObraEmpleados: (empData ?? []) as FormulaContext['manoObraEmpleados'],
+            volumenesColumnas: (volColData ?? []) as FormulaContext['volumenesColumnas'],
+            volumenesFilas: (volFilData ?? []) as FormulaContext['volumenesFilas'],
+            costosColumnas: cols as FormulaContext['costosColumnas'],
+            costosFilas: rows as FormulaContext['costosFilas'],
+            areasData: mappedAreasData,
+            volDistribucion: (volDistData ?? []) as FormulaContext['volDistribucion'],
+          },
+          mappedAreasData[i].nombre
+        );
+      } else {
+        mappedAreasData[i].costo_area = areaRecord?.costo_area ?? 0;
+      }
+    }
 
     // ── Guardar datos base (sin pre-calcular fórmulas) ────────────────────
     // El formulaCtx se reconstruye reactivamente en el useMemo de arriba,
@@ -149,6 +192,8 @@ export default function CostosPage() {
       costosColumnas: cols as FormulaContext['costosColumnas'],
       costosFilas: rows as FormulaContext['costosFilas'],
       areasData: mappedAreasData,
+      volDistribucion: (volDistData ?? []) as FormulaContext['volDistribucion'],
+      factores: (factoresData ?? []) as FormulaContext['factores'],
     };
 
     setBaseCtxData({ cols, rows, baseCtx });
@@ -156,34 +201,6 @@ export default function CostosPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
-
-  // ── Cargar multiplicador de simulación desde Supabase ─────────────────────
-  useEffect(() => {
-    const fetchSimMultiplier = async () => {
-      const { data } = await supabase
-        .from('app_config')
-        .select('value')
-        .eq('key', 'sim_multiplier')
-        .maybeSingle();
-      if (data?.value !== undefined && data?.value !== null) {
-        setSimMultiplier(String(data.value));
-      }
-      setSimMultiplierLoaded(true);
-    };
-    fetchSimMultiplier();
-  }, []);
-
-  // ── Guardar multiplicador en Supabase cuando cambia ───────────────────────
-  const handleSimMultiplierChange = useCallback(async (value: string) => {
-    setSimMultiplier(value);
-    const numVal = parseFloat(value);
-    if (!isNaN(numVal)) {
-      await supabase
-        .from('app_config')
-        .update({ value: numVal })
-        .eq('key', 'sim_multiplier');
-    }
-  }, []);
 
   // ---------- COLUMNS ----------
   const handleSaveColumn = async (data: {
@@ -310,8 +327,9 @@ export default function CostosPage() {
     volColumnas: (formulaCtx.volumenesColumnas ?? []).filter(c => ['moneda', 'numero'].includes(c.tipo ?? '')).length,
     areas: formulaCtx.areaDistribucion.length,
     areasM2: (formulaCtx.areasData ?? []).filter(a => (a.metros_cuadrados ?? 0) > 0).length,
+    volDist: (formulaCtx.volDistribucion ?? []).filter(v => v.is_active).length,
   };
-  const hasSources = srcCount.inversiones > 0 || srcCount.gastosFilas > 0 || srcCount.moColumnas > 0 || srcCount.volColumnas > 0 || srcCount.areasM2 > 0;
+  const hasSources = srcCount.inversiones > 0 || srcCount.gastosFilas > 0 || srcCount.moColumnas > 0 || srcCount.volColumnas > 0 || srcCount.areasM2 > 0 || srcCount.volDist > 0;
 
   if (loading) {
     return (
@@ -387,6 +405,11 @@ export default function CostosPage() {
                 <i className="ri-layout-grid-line mr-1" />{srcCount.areasM2} áreas con M² y racks
               </span>
             )}
+            {srcCount.volDist > 0 && (
+              <span className="text-xs text-violet-600 bg-white border border-violet-200 px-2 py-0.5 rounded-full">
+                <i className="ri-pie-chart-2-line mr-1" />{srcCount.volDist} segmentos vol. distribución
+              </span>
+            )}
           </div>
         )}
 
@@ -411,8 +434,6 @@ export default function CostosPage() {
           onAddFilaForProceso={handleAddFilaForProceso}
           onReorderColumns={handleReorderColumns}
           formulaCtx={formulaCtx}
-          simMultiplier={simMultiplierLoaded ? simMultiplier : '1'}
-          onSimMultiplierChange={handleSimMultiplierChange}
         />
 
         {modalState.open && (

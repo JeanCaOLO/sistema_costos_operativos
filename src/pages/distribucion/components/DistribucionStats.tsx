@@ -2,11 +2,16 @@ import type { AreaDistribution } from '../../../types/areas';
 
 type FilterCategoria = 'all' | 'Interior' | 'Exterior';
 
+type DistMode = 'm2' | 'm3';
+
 interface DistribucionStatsProps {
   data: AreaDistribution[];
+  dataM2: AreaDistribution[];
+  dataM3: AreaDistribution[];
   filterCategoria: FilterCategoria;
   interiorData: AreaDistribution[];
   exteriorData: AreaDistribution[];
+  distMode: DistMode;
 }
 
 interface StatCardProps {
@@ -34,12 +39,13 @@ function StatCard({ icon, iconBg, iconColor, label, value, sub, subColor }: Stat
   );
 }
 
-function CategoryMiniCard({ label, icon, iconColor, count, m2, percentage, accent }: {
+function CategoryMiniCard({ label, icon, iconColor, count, metric, unit, percentage, accent }: {
   label: string;
   icon: string;
   iconColor: string;
   count: number;
-  m2: number;
+  metric: number;
+  unit: string;
   percentage: number;
   accent: string;
 }) {
@@ -60,26 +66,42 @@ function CategoryMiniCard({ label, icon, iconColor, count, m2, percentage, accen
           <p className="text-xs text-slate-500">área{count !== 1 ? 's' : ''}</p>
         </div>
         <div className="text-right">
-          <p className="text-base font-bold text-slate-700">{m2.toLocaleString()}</p>
-          <p className="text-xs text-slate-500">metros²</p>
+          <p className="text-base font-bold text-slate-700">{metric.toLocaleString()}</p>
+          <p className="text-xs text-slate-500">metros{unit}</p>
         </div>
       </div>
     </div>
   );
 }
 
-export default function DistribucionStats({ data, filterCategoria, interiorData, exteriorData }: DistribucionStatsProps) {
+export default function DistribucionStats({ data, dataM2, dataM3, filterCategoria, interiorData, exteriorData, distMode }: DistribucionStatsProps) {
+  const isCubic = distMode === 'm3';
+
   const activeData = filterCategoria === 'all' ? data : filterCategoria === 'Interior' ? interiorData : exteriorData;
-  const totalM2 = activeData.reduce((s, d) => s + d.square_meters, 0);
-  const totalM2Global = data.reduce((s, d) => s + d.square_meters, 0);
-  const topArea = activeData.length > 0 ? [...activeData].sort((a, b) => b.square_meters - a.square_meters)[0] : null;
+  const totalM2 = dataM2.reduce((s, d) => s + d.square_meters, 0);
+  const totalM3 = dataM3.reduce((s, d) => s + d.cubic_meters, 0);
+  const activeTotal = isCubic
+    ? activeData.reduce((s, d) => s + d.cubic_meters, 0)
+    : activeData.reduce((s, d) => s + d.square_meters, 0);
+  const activeTop = activeData.length > 0
+    ? [...activeData].sort((a, b) =>
+        isCubic ? b.cubic_meters - a.cubic_meters : b.square_meters - a.square_meters
+      )[0]
+    : null;
 
   const tiposCount = new Set(activeData.map((d) => d.area_type)).size;
 
-  const interiorM2 = interiorData.reduce((s, d) => s + d.square_meters, 0);
-  const exteriorM2 = exteriorData.reduce((s, d) => s + d.square_meters, 0);
-  const interiorPct = totalM2Global > 0 ? (interiorM2 / totalM2Global) * 100 : 0;
-  const exteriorPct = totalM2Global > 0 ? (exteriorM2 / totalM2Global) * 100 : 0;
+  const interiorM2 = dataM2.filter((d) => d.categoria === 'Interior').reduce((s, d) => s + d.square_meters, 0);
+  const exteriorM2 = dataM2.filter((d) => d.categoria === 'Exterior').reduce((s, d) => s + d.square_meters, 0);
+  const interiorM3 = dataM3.filter((d) => d.categoria === 'Interior').reduce((s, d) => s + d.cubic_meters, 0);
+  const exteriorM3 = dataM3.filter((d) => d.categoria === 'Exterior').reduce((s, d) => s + d.cubic_meters, 0);
+
+  const interiorPct = isCubic
+    ? (totalM3 > 0 ? (interiorM3 / totalM3) * 100 : 0)
+    : (totalM2 > 0 ? (interiorM2 / totalM2) * 100 : 0);
+  const exteriorPct = isCubic
+    ? (totalM3 > 0 ? (exteriorM3 / totalM3) * 100 : 0)
+    : (totalM2 > 0 ? (exteriorM2 / totalM2) * 100 : 0);
 
   if (filterCategoria === 'all') {
     return (
@@ -92,23 +114,27 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
             iconColor="text-emerald-600"
             label="Total Áreas"
             value={String(data.length)}
-            sub={`${interiorData.length} int. · ${exteriorData.length} ext.`}
+            sub={`${dataM2.filter(d => d.categoria === 'Interior').length} int. · ${dataM2.filter(d => d.categoria === 'Exterior').length} ext.`}
           />
           <StatCard
-            icon="ri-ruler-2-line"
+            icon={isCubic ? 'ri-box-3-line' : 'ri-ruler-2-line'}
             iconBg="bg-amber-50"
             iconColor="text-amber-600"
-            label="Total m² General"
-            value={`${totalM2Global.toLocaleString()} m²`}
-            sub={`${interiorM2.toLocaleString()} int. · ${exteriorM2.toLocaleString()} ext.`}
+            label={isCubic ? 'Total m³ General' : 'Total m² General'}
+            value={`${isCubic ? totalM3.toLocaleString() + ' m³' : totalM2.toLocaleString() + ' m²'}`}
+            sub={isCubic ? `${interiorM3.toLocaleString()} int. · ${exteriorM3.toLocaleString()} ext.` : `${interiorM2.toLocaleString()} int. · ${exteriorM2.toLocaleString()} ext.`}
           />
           <StatCard
             icon="ri-trophy-line"
             iconBg="bg-rose-50"
             iconColor="text-rose-500"
             label="Área de mayor peso"
-            value={topArea?.area_name ?? '—'}
-            sub={topArea ? `${topArea.global_distribution_percentage.toFixed(2)}% del total` : undefined}
+            value={activeTop?.area_name ?? '—'}
+            sub={activeTop
+              ? (isCubic
+                ? `${activeTop.global_distribution_cubic_percentage.toFixed(2)}% del total`
+                : `${activeTop.global_distribution_percentage.toFixed(2)}% del total`)
+              : undefined}
             subColor="text-rose-500"
           />
         </div>
@@ -118,8 +144,9 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
             label="Interior"
             icon="ri-home-4-line"
             iconColor="text-amber-500"
-            count={interiorData.length}
-            m2={interiorM2}
+            count={dataM2.filter(d => d.categoria === 'Interior').length}
+            metric={isCubic ? interiorM3 : interiorM2}
+            unit={isCubic ? 'm³' : 'm²'}
             percentage={interiorPct}
             accent="border-amber-200"
           />
@@ -127,8 +154,9 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
             label="Exterior"
             icon="ri-sun-line"
             iconColor="text-sky-500"
-            count={exteriorData.length}
-            m2={exteriorM2}
+            count={dataM2.filter(d => d.categoria === 'Exterior').length}
+            metric={isCubic ? exteriorM3 : exteriorM2}
+            unit={isCubic ? 'm³' : 'm²'}
             percentage={exteriorPct}
             accent="border-sky-200"
           />
@@ -139,8 +167,14 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
 
   // Filtered by category
   const isInterior = filterCategoria === 'Interior';
-  const catPct = totalM2Global > 0 ? (totalM2 / totalM2Global) * 100 : 0;
-  const topCatArea = [...activeData].sort((a, b) => b.category_distribution_percentage - a.category_distribution_percentage)[0];
+  const catPct = isCubic
+    ? (totalM3 > 0 ? (activeTotal / totalM3) * 100 : 0)
+    : (totalM2 > 0 ? (activeTotal / totalM2) * 100 : 0);
+  const topCatArea = [...activeData].sort((a, b) =>
+    isCubic
+      ? b.category_distribution_cubic_percentage - a.category_distribution_cubic_percentage
+      : b.category_distribution_percentage - a.category_distribution_percentage
+  )[0];
 
   return (
     <div className="grid grid-cols-4 gap-4 mb-6">
@@ -152,11 +186,11 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
         value={String(activeData.length)}
       />
       <StatCard
-        icon="ri-ruler-2-line"
+        icon={isCubic ? 'ri-box-3-line' : 'ri-ruler-2-line'}
         iconBg={isInterior ? 'bg-amber-50' : 'bg-sky-50'}
         iconColor={isInterior ? 'text-amber-600' : 'text-sky-600'}
-        label={`Total m² ${filterCategoria}`}
-        value={`${totalM2.toLocaleString()} m²`}
+        label={`Total ${isCubic ? 'm³' : 'm²'} ${filterCategoria}`}
+        value={`${activeTotal.toLocaleString()} ${isCubic ? 'm³' : 'm²'}`}
         sub={`${catPct.toFixed(1)}% del total global`}
         subColor={isInterior ? 'text-amber-500' : 'text-sky-500'}
       />
@@ -173,7 +207,11 @@ export default function DistribucionStats({ data, filterCategoria, interiorData,
         iconColor="text-rose-500"
         label={`Mayor peso en ${filterCategoria}`}
         value={topCatArea?.area_name ?? '—'}
-        sub={topCatArea ? `${topCatArea.category_distribution_percentage.toFixed(2)}% de ${filterCategoria}` : undefined}
+        sub={topCatArea
+          ? (isCubic
+            ? `${topCatArea.category_distribution_cubic_percentage.toFixed(2)}% de ${filterCategoria}`
+            : `${topCatArea.category_distribution_percentage.toFixed(2)}% de ${filterCategoria}`)
+          : undefined}
         subColor="text-rose-500"
       />
     </div>

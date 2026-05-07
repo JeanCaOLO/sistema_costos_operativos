@@ -1,49 +1,59 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { FixedColumnHeaders } from './components/CotizacionDetalleTable';
 import { supabase } from '@/lib/supabase';
 import AppLayout from '@/components/feature/AppLayout';
-import type { Cotizacion, CotizacionItem } from '@/types/cotizaciones';
+import type { CotizacionCabecera, CotizacionDetalle, CotizacionColumnaDinamica, CotizacionValorDinamico, DetalleConValores } from '@/types/cotizaciones_v2';
+import { MESES, ESTADO_V2_CONFIG } from '@/types/cotizaciones_v2';
 import type { CostoFila, CostoColumna } from '@/types/costos';
+import { calcularFormula, EMPTY_FORMULA_CTX } from '@/lib/formulaEngine';
+import { buildRowVarContext } from '@/lib/cotizacionFormulaEngine';
 import type { FormulaContext } from '@/lib/formulaEngine';
-import { EMPTY_FORMULA_CTX, calcularFormula } from '@/lib/formulaEngine';
 import type { Area } from '@/types/areas';
 import type { InversionRecord } from '@/types/inversion';
 import { useLocalStorageValue } from '@/hooks/useLocalStorageSync';
 import type { VolPromedioConfig } from '@/hooks/useVolumenesPromedioConfig';
-import CotizacionesList from './components/CotizacionesList';
-import CotizacionFormModal from './components/CotizacionFormModal';
-import CotizacionRowSelector from './components/CotizacionRowSelector';
-import CotizacionTable from './components/CotizacionTable';
-import type { FormulaConfig } from '@/types/costos';
-import CotizacionPDFPreview from './components/CotizacionPDFPreview';
+
+import CotizacionSidebar from './components/CotizacionSidebar';
+import NuevaCotizacionModal from './components/NuevaCotizacionModal';
+import DuplicarCotizacionModal from './components/DuplicarCotizacionModal';
+import AdminColumnasDinamicasModal from './components/AdminColumnasDinamicasModal';
+import CotizacionDetalleTable from './components/CotizacionDetalleTable';
+import CotizacionSubprocesoSelector from './components/CotizacionSubprocesoSelector';
+import CotizacionComparativa from './components/CotizacionComparativa';
 
 const VOL_LASTN_KEY = 'vol_promedio_lastN';
 
-interface CotizacionTableItemRow {
-  item: CotizacionItem;
-  fila: CostoFila;
-}
-
 export default function CotizacionesPage() {
-  const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
-  const [selectedCot, setSelectedCot] = useState<Cotizacion | null>(null);
-  const [items, setItems] = useState<CotizacionItem[]>([]);
+  // ─── Data ────────────────────────────────────────────────────────────────────
+  const [cabeceras, setCabeceras] = useState<CotizacionCabecera[]>([]);
+  const [detalles, setDetalles] = useState<CotizacionDetalle[]>([]);
+  const [valoresDinamicos, setValoresDinamicos] = useState<CotizacionValorDinamico[]>([]);
+  const [columnasDinamicas, setColumnasDinamicas] = useState<CotizacionColumnaDinamica[]>([]);
   const [costoFilas, setCostoFilas] = useState<CostoFila[]>([]);
   const [costoColumnas, setCostoColumnas] = useState<CostoColumna[]>([]);
   const [baseCtx, setBaseCtx] = useState<FormulaContext>(EMPTY_FORMULA_CTX);
+
+  // ─── UI state ────────────────────────────────────────────────────────────────
+  const [selectedCabecera, setSelectedCabecera] = useState<CotizacionCabecera | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingItems, setLoadingItems] = useState(false);
-  const [showFormModal, setShowFormModal] = useState(false);
-  const [editingCot, setEditingCot] = useState<Cotizacion | null>(null);
-  const [showPDF, setShowPDF] = useState(false);
-  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [loadingDetalles, setLoadingDetalles] = useState(false);
+  const [showNuevaModal, setShowNuevaModal] = useState(false);
+  const [editingCabecera, setEditingCabecera] = useState<CotizacionCabecera | null>(null);
+  const [duplicatingFrom, setDuplicatingFrom] = useState<CotizacionCabecera | null>(null);
+  const [showAdminColumnas, setShowAdminColumnas] = useState(false);
+  const [showComparativa, setShowComparativa] = useState(false);
+  const [savingMult, setSavingMult] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const skipDetallesReloadRef = useRef(false);
 
-  // columnas visibles de fórmula: null = ninguna (ocultas por defecto), Set = las activadas
-  const columnasVisibles = useMemo<Set<string>>(() => {
-    if (!selectedCot) return new Set<string>();
-    if (!selectedCot.columnas_visibles || selectedCot.columnas_visibles.length === 0) return new Set<string>();
-    return new Set(selectedCot.columnas_visibles);
-  }, [selectedCot]);
+  // Fixed column headers (persisted in localStorage per cabecera)
+  const [fixedHeaders, setFixedHeaders] = useState<FixedColumnHeaders>({
+    costoUnidad: 'Costo por unidad',
+    totalItem: 'Costo Total',
+  });
+  const [totalFormula, setTotalFormula] = useState<string>('');
 
+  // Volumen promedio config (must be declared BEFORE formulaCtx)
   const volLastN = useLocalStorageValue<VolPromedioConfig>(
     VOL_LASTN_KEY,
     (raw) => {
@@ -56,7 +66,7 @@ export default function CotizacionesPage() {
     { recibido: 0, despachado: 0 },
   );
 
-  // Build formulaCtx reactively
+  // ─── Formula context ─────────────────────────────────────────────────────────
   const formulaCtx = useMemo<FormulaContext>(() => {
     const cols = baseCtx.costosColumnas as CostoColumna[];
     const rows = baseCtx.costosFilas as CostoFila[];
@@ -73,11 +83,39 @@ export default function CotizacionesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseCtx, volLastN.recibido, volLastN.despachado]);
 
-  // Load all base data + cotizaciones
+  // Refs to always access latest state inside callbacks without recreating them
+  // (must be declared AFTER formulaCtx and volLastN)
+  const detallesRef = useRef(detalles);
+  useEffect(() => { detallesRef.current = detalles; }, [detalles]);
+  const valoresDinamicosRef = useRef(valoresDinamicos);
+  useEffect(() => { valoresDinamicosRef.current = valoresDinamicos; }, [valoresDinamicos]);
+  const formulaCtxRef = useRef(formulaCtx);
+  useEffect(() => { formulaCtxRef.current = formulaCtx; }, [formulaCtx]);
+  const costoFilasRef = useRef(costoFilas);
+  useEffect(() => { costoFilasRef.current = costoFilas; }, [costoFilas]);
+  const costoColumnasRef = useRef(costoColumnas);
+  useEffect(() => { costoColumnasRef.current = costoColumnas; }, [costoColumnas]);
+  const autoSyncedRef = useRef<Set<string>>(new Set());
+
+  // Load fixed headers + total formula when cabecera changes
+  useEffect(() => {
+    if (!selectedCabecera) return;
+    const stored = localStorage.getItem(`fixed_headers_${selectedCabecera.id}`);
+    if (stored) {
+      try { setFixedHeaders(JSON.parse(stored)); } catch { /* ignore */ }
+    } else {
+      setFixedHeaders({ costoUnidad: 'Costo por unidad', totalItem: 'Costo Total' });
+    }
+    // Load formula from cabecera (Supabase is source of truth)
+    setTotalFormula(selectedCabecera.total_formula ?? '');
+  }, [selectedCabecera?.id, selectedCabecera?.total_formula]);
+
+  // ─── Load all base data ───────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
     const [
-      { data: cotData },
+      { data: cabData },
+      { data: colDinData },
       { data: colData },
       { data: filData },
       { data: invData },
@@ -90,8 +128,10 @@ export default function CotizacionesPage() {
       { data: volFilData },
       { data: empData },
       { data: areasData },
+      { data: volDistData },
     ] = await Promise.all([
-      supabase.from('cotizaciones').select('*').order('updated_at', { ascending: false }),
+      supabase.from('cotizacion_cabecera').select('*').order('anio', { ascending: false }).order('mes', { ascending: false }).order('version', { ascending: false }),
+      supabase.from('cotizacion_columnas_dinamicas').select('*').order('sort_order'),
       supabase.from('costos_columnas').select('*').order('orden'),
       supabase.from('costos_operacion').select('*').order('orden'),
       supabase.from('inversiones').select('*').order('created_at'),
@@ -104,13 +144,15 @@ export default function CotizacionesPage() {
       supabase.from('volumenes').select('id, proceso, subproceso, valores'),
       supabase.from('mano_obra_empleados').select('*').eq('is_active', true),
       supabase.from('areas').select('id, nombre, metros_cuadrados, cantidad_racks, categoria').order('nombre'),
+      supabase.from('volumen_distribucion').select('id, nombre, porcentaje, porcentaje_inbound, porcentaje_outbound, categoria, is_active').eq('is_active', true).order('orden'),
     ]);
 
     const cols = (colData as CostoColumna[]) ?? [];
     const rows = (filData as CostoFila[]) ?? [];
     setCostoColumnas(cols);
     setCostoFilas(rows);
-    setCotizaciones((cotData as Cotizacion[]) ?? []);
+    setCabeceras((cabData as CotizacionCabecera[]) ?? []);
+    setColumnasDinamicas((colDinData as CotizacionColumnaDinamica[]) ?? []);
 
     const areasArr = ((areasData ?? []) as Area[]);
     const mappedAreas = areasArr.map(a => ({ nombre: a.nombre, metros_cuadrados: a.metros_cuadrados ?? 0, cantidad_racks: a.cantidad_racks ?? 0 }));
@@ -137,157 +179,534 @@ export default function CotizacionesPage() {
       costosColumnas: cols as FormulaContext['costosColumnas'],
       costosFilas: rows as FormulaContext['costosFilas'],
       areasData: mappedAreas,
+      volDistribucion: (volDistData ?? []) as FormulaContext['volDistribucion'],
     });
     setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Load items when cotizacion selected
-  const loadItems = useCallback(async (cotId: string) => {
-    setLoadingItems(true);
-    const { data } = await supabase.from('cotizacion_items').select('*').eq('cotizacion_id', cotId).order('orden');
-    setItems((data as CotizacionItem[]) ?? []);
-    setLoadingItems(false);
+  // ─── Load detalles when cabecera selected ────────────────────────────────────
+  const loadDetalles = useCallback(async (cabeceraId: string) => {
+    if (skipDetallesReloadRef.current) {
+      skipDetallesReloadRef.current = false;
+      return;
+    }
+    setLoadingDetalles(true);
+    const [{ data: detData }, { data: valData }] = await Promise.all([
+      supabase.from('cotizacion_detalle').select('*').eq('cabecera_id', cabeceraId).order('orden'),
+      supabase.from('cotizacion_valores_dinamicos').select('*').in(
+        'detalle_id',
+        ['00000000-0000-0000-0000-000000000000']
+      ),
+    ]);
+    const dets = (detData as CotizacionDetalle[]) ?? [];
+    setDetalles(dets);
+
+    if (dets.length > 0) {
+      const { data: valsData } = await supabase
+        .from('cotizacion_valores_dinamicos')
+        .select('*')
+        .in('detalle_id', dets.map(d => d.id));
+      setValoresDinamicos((valsData as CotizacionValorDinamico[]) ?? []);
+    } else {
+      setValoresDinamicos([]);
+    }
+    setLoadingDetalles(false);
   }, []);
 
   useEffect(() => {
-    if (selectedCot) loadItems(selectedCot.id);
-    else setItems([]);
-  }, [selectedCot, loadItems]);
-
-  // Selected fila ids
-  const selectedIds = useMemo(() => new Set(items.map(i => i.costo_fila_id)), [items]);
-
-  // Toggle selection
-  const handleToggle = useCallback(async (filaId: string) => {
-    if (!selectedCot) return;
-    const existing = items.find(i => i.costo_fila_id === filaId);
-    if (existing) {
-      await supabase.from('cotizacion_items').delete().eq('id', existing.id);
-      setItems(prev => prev.filter(i => i.id !== existing.id));
+    if (selectedCabecera) {
+      loadDetalles(selectedCabecera.id);
     } else {
-      const { data } = await supabase.from('cotizacion_items').insert({
-        cotizacion_id: selectedCot.id,
-        costo_fila_id: filaId,
-        multiplicador: 1,
-        orden: items.length,
-        notas_item: '',
-      }).select().maybeSingle();
-      if (data) setItems(prev => [...prev, data as CotizacionItem]);
+      setDetalles([]);
+      setValoresDinamicos([]);
     }
-  }, [selectedCot, items]);
+    // Reset auto-sync flag when cabecera changes so it re-syncs on next load
+    autoSyncedRef.current.clear();
+  }, [selectedCabecera?.id, loadDetalles]);
 
-  const handleSelectAll = useCallback(async (proceso: string) => {
-    if (!selectedCot) return;
-    const toAdd = costoFilas.filter(f => f.proceso === proceso && !selectedIds.has(f.id));
-    if (toAdd.length === 0) return;
-    const inserts = toAdd.map((f, idx) => ({ cotizacion_id: selectedCot.id, costo_fila_id: f.id, multiplicador: 1, orden: items.length + idx, notas_item: '' }));
-    const { data } = await supabase.from('cotizacion_items').insert(inserts).select();
-    if (data) setItems(prev => [...prev, ...(data as CotizacionItem[])]);
-  }, [selectedCot, costoFilas, selectedIds, items.length]);
+  // ─── Auto-sync costos base when formulaCtx or costo data changes ──────────────
+  useEffect(() => {
+    if (!selectedCabecera || detalles.length === 0 || !formulaCtx) return;
+    if (autoSyncedRef.current.has(selectedCabecera.id)) return;
 
-  const handleDeselectAll = useCallback(async (proceso: string) => {
-    if (!selectedCot) return;
-    const toRemove = items.filter(i => costoFilas.find(f => f.id === i.costo_fila_id && f.proceso === proceso));
-    if (toRemove.length === 0) return;
-    await supabase.from('cotizacion_items').delete().in('id', toRemove.map(i => i.id));
-    setItems(prev => prev.filter(i => !toRemove.find(r => r.id === i.id)));
-  }, [selectedCot, items, costoFilas]);
-
-  const handleUpdateMultiplier = useCallback(async (itemId: string, value: number) => {
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, multiplicador: value } : i));
-    await supabase.from('cotizacion_items').update({ multiplicador: value }).eq('id', itemId);
-  }, []);
-
-  const handleUpdateNota = useCallback(async (itemId: string, value: string) => {
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, notas_item: value } : i));
-    await supabase.from('cotizacion_items').update({ notas_item: value }).eq('id', itemId);
-  }, []);
-
-  const handleRemoveItem = useCallback(async (itemId: string) => {
-    await supabase.from('cotizacion_items').delete().eq('id', itemId);
-    setItems(prev => prev.filter(i => i.id !== itemId));
-  }, []);
-
-  const handleUpdateFormulaOverride = useCallback(async (itemId: string, colId: string, formula: FormulaConfig) => {
-    const existing = items.find(i => i.id === itemId);
-    if (!existing) return;
-    const newOverrides = { ...(existing.formulas_override ?? {}), [colId]: formula };
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, formulas_override: newOverrides } : i));
-    await supabase.from('cotizacion_items').update({ formulas_override: newOverrides }).eq('id', itemId);
-  }, [items]);
-
-  const handleToggleColumna = useCallback(async (colId: string) => {
-    if (!selectedCot) return;
-    // columnasVisibles = Set de columnas de fórmula ACTIVADAS (vacío = todas ocultas)
-    const currentSet = new Set(columnasVisibles);
-    if (currentSet.has(colId)) {
-      currentSet.delete(colId);
-    } else {
-      currentSet.add(colId);
+    const updates: { id: string; costo_base: number; total_final: number }[] = [];
+    for (const det of detalles) {
+      if (!det.costo_fila_id) continue;
+      const fila = costoFilas.find(f => f.id === det.costo_fila_id);
+      if (!fila) continue;
+      const newCostoBase = costoColumnas.reduce((sum, col) => {
+        if (col.tipo === 'texto' || col.tipo === 'select') return sum;
+        if (col.tipo === 'formula') {
+          const f = fila.formulas?.[col.id] ?? col.formula;
+          if (!f) return sum;
+          const mode = f.mode ?? 'terms';
+          const has = (mode === 'expression' && !!f.expression?.trim()) || (mode === 'terms' && (f.terminos?.length ?? 0) > 0);
+          return has ? sum + calcularFormula(f, formulaCtx, fila.subproceso) : sum;
+        }
+        const v = Number(fila.valores[col.id] ?? 0);
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0);
+      const newTotal = newCostoBase * det.multiplicador_base;
+      if (Math.abs(newCostoBase - det.costo_base) > 0.001) {
+        updates.push({ id: det.id, costo_base: newCostoBase, total_final: newTotal });
+      }
     }
-    const newVal = currentSet.size === 0 ? null : Array.from(currentSet);
-    const updated = { ...selectedCot, columnas_visibles: newVal };
-    setSelectedCot(updated);
-    setCotizaciones(prev => prev.map(c => c.id === selectedCot.id ? updated : c));
-    await supabase.from('cotizaciones').update({ columnas_visibles: newVal }).eq('id', selectedCot.id);
-  }, [selectedCot, columnasVisibles]);
+    if (updates.length > 0) {
+      Promise.all(
+        updates.map(u =>
+          supabase.from('cotizacion_detalle').update({ costo_base: u.costo_base, total_final: u.total_final }).eq('id', u.id)
+        )
+      ).then(() => {
+        setDetalles(prev => prev.map(d => {
+          const upd = updates.find(u => u.id === d.id);
+          return upd ? { ...d, costo_base: upd.costo_base, total_final: upd.total_final } : d;
+        }));
+      });
+    }
+    autoSyncedRef.current.add(selectedCabecera.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCabecera?.id, detalles.length, formulaCtx, costoFilas.length, costoColumnas.length]);
 
-  const handleClearFormulaOverride = useCallback(async (itemId: string, colId: string) => {
-    const existing = items.find(i => i.id === itemId);
-    if (!existing) return;
-    const newOverrides = { ...(existing.formulas_override ?? {}) };
-    delete newOverrides[colId];
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, formulas_override: newOverrides } : i));
-    await supabase.from('cotizacion_items').update({ formulas_override: newOverrides }).eq('id', itemId);
-  }, [items]);
+  // ─── Detalles enriquecidos con valores dinámicos ──────────────────────────────
+  const detallesConValores = useMemo<DetalleConValores[]>(() => {
+    return detalles.map(d => {
+      const vals: Record<string, CotizacionValorDinamico> = {};
+      valoresDinamicos.filter(v => v.detalle_id === d.id).forEach(v => { vals[v.columna_id] = v; });
+      return { ...d, valores: vals };
+    });
+  }, [detalles, valoresDinamicos]);
 
-  const handleUpdateGlobalMult = useCallback(async (value: number) => {
-    if (!selectedCot) return;
-    const updated = { ...selectedCot, sim_multiplier: value };
-    setSelectedCot(updated);
-    setCotizaciones(prev => prev.map(c => c.id === selectedCot.id ? updated : c));
-    setSavingGlobal(true);
-    await supabase.from('cotizaciones').update({ sim_multiplier: value }).eq('id', selectedCot.id);
-    setSavingGlobal(false);
-  }, [selectedCot]);
+  // ─── Selected IDs for selector ───────────────────────────────────────────────
+  const selectedFilaIds = useMemo(() => new Set(detalles.map(d => d.costo_fila_id).filter(Boolean) as string[]), [detalles]);
 
-  // Form handlers
-  const handleSaveCot = useCallback(async (data: Partial<Cotizacion>) => {
-    if (editingCot) {
-      const { data: updated } = await supabase.from('cotizaciones').update({ ...data, updated_at: new Date().toISOString() }).eq('id', editingCot.id).select().maybeSingle();
+  // ─── Cabecera CRUD ────────────────────────────────────────────────────────────
+  const handleSaveCabecera = useCallback(async (data: Omit<CotizacionCabecera, 'id' | 'created_at' | 'updated_at' | 'created_by' | 'total_general'>) => {
+    if (editingCabecera) {
+      const { data: updated } = await supabase
+        .from('cotizacion_cabecera')
+        .update({ ...data, updated_at: new Date().toISOString() })
+        .eq('id', editingCabecera.id)
+        .select()
+        .maybeSingle();
       if (updated) {
-        setCotizaciones(prev => prev.map(c => c.id === editingCot.id ? updated as Cotizacion : c));
-        if (selectedCot?.id === editingCot.id) setSelectedCot(updated as Cotizacion);
+        setCabeceras(prev => prev.map(c => c.id === editingCabecera.id ? updated as CotizacionCabecera : c));
+        if (selectedCabecera?.id === editingCabecera.id) setSelectedCabecera(updated as CotizacionCabecera);
       }
     } else {
-      const { data: newCot } = await supabase.from('cotizaciones').insert(data).select().maybeSingle();
-      if (newCot) {
-        setCotizaciones(prev => [newCot as Cotizacion, ...prev]);
-        setSelectedCot(newCot as Cotizacion);
+      const { data: newCab } = await supabase
+        .from('cotizacion_cabecera')
+        .insert({ ...data, total_general: 0 })
+        .select()
+        .maybeSingle();
+      if (newCab) {
+        setCabeceras(prev => [newCab as CotizacionCabecera, ...prev]);
+        setSelectedCabecera(newCab as CotizacionCabecera);
       }
     }
-    setEditingCot(null);
-  }, [editingCot, selectedCot]);
+    setEditingCabecera(null);
+  }, [editingCabecera, selectedCabecera]);
 
-  const handleDeleteCot = useCallback(async (id: string) => {
-    if (!confirm('¿Eliminar esta cotización? Se perderán todos sus ítems.')) return;
-    await supabase.from('cotizaciones').delete().eq('id', id);
-    setCotizaciones(prev => prev.filter(c => c.id !== id));
-    if (selectedCot?.id === id) { setSelectedCot(null); setItems([]); }
-  }, [selectedCot]);
+  const handleDeleteCabecera = useCallback(async (id: string) => {
+    if (!confirm('¿Eliminar esta cotización? Se perderán todos sus detalles.')) return;
+    await supabase.from('cotizacion_cabecera').delete().eq('id', id);
+    setCabeceras(prev => prev.filter(c => c.id !== id));
+    if (selectedCabecera?.id === id) { setSelectedCabecera(null); setDetalles([]); }
+  }, [selectedCabecera]);
 
-  // Table items with fila data
-  const tableItems = useMemo<CotizacionTableItemRow[]>(() => {
-    return items
-      .map(item => {
-        const fila = costoFilas.find(f => f.id === item.costo_fila_id);
-        if (!fila) return null;
-        return { item, fila };
+  // ─── Duplicar ─────────────────────────────────────────────────────────────────
+  const handleDuplicate = useCallback(async (opts: { mes: number; anio: number; version: number; moneda: string; notas: string }) => {
+    if (!duplicatingFrom) return;
+    // 1. Create new cabecera
+    const { data: newCab } = await supabase
+      .from('cotizacion_cabecera')
+      .insert({
+        cliente: duplicatingFrom.cliente,
+        mes: opts.mes,
+        anio: opts.anio,
+        version: opts.version,
+        estado: 'borrador',
+        moneda: opts.moneda,
+        total_general: 0,
+        notas: opts.notas,
       })
-      .filter(Boolean) as CotizacionTableItemRow[];
-  }, [items, costoFilas]);
+      .select()
+      .maybeSingle();
+    if (!newCab) return;
+
+    // 2. Copy detalles
+    const { data: srcDetalles } = await supabase
+      .from('cotizacion_detalle')
+      .select('*')
+      .eq('cabecera_id', duplicatingFrom.id);
+
+    if (srcDetalles && srcDetalles.length > 0) {
+      const newDetalles = (srcDetalles as CotizacionDetalle[]).map(d => ({
+        cabecera_id: (newCab as CotizacionCabecera).id,
+        proceso: d.proceso,
+        subproceso: d.subproceso,
+        costo_base: d.costo_base,
+        multiplicador_base: d.multiplicador_base,
+        total_final: d.total_final,
+        orden: d.orden,
+        notas_fila: d.notas_fila,
+        costo_fila_id: d.costo_fila_id,
+      }));
+      const { data: insertedDetalles } = await supabase.from('cotizacion_detalle').insert(newDetalles).select();
+
+      // 3. Copy valores dinámicos
+      if (insertedDetalles && insertedDetalles.length > 0) {
+        const srcIds = (srcDetalles as CotizacionDetalle[]).map(d => d.id);
+        const { data: srcVals } = await supabase.from('cotizacion_valores_dinamicos').select('*').in('detalle_id', srcIds);
+        if (srcVals && srcVals.length > 0) {
+          const idMap = new Map<string, string>();
+          (srcDetalles as CotizacionDetalle[]).forEach((d, i) => {
+            idMap.set(d.id, (insertedDetalles as CotizacionDetalle[])[i]?.id ?? '');
+          });
+          const newVals = (srcVals as CotizacionValorDinamico[])
+            .filter(v => idMap.get(v.detalle_id))
+            .map(v => ({
+              detalle_id: idMap.get(v.detalle_id)!,
+              columna_id: v.columna_id,
+              raw_value: v.raw_value,
+              computed_value: v.computed_value,
+            }));
+          if (newVals.length > 0) await supabase.from('cotizacion_valores_dinamicos').insert(newVals);
+        }
+      }
+    }
+
+    setCabeceras(prev => [newCab as CotizacionCabecera, ...prev]);
+    setSelectedCabecera(newCab as CotizacionCabecera);
+    setDuplicatingFrom(null);
+  }, [duplicatingFrom]);
+
+  // ─── Subproceso toggle ────────────────────────────────────────────────────────
+  const handleToggleFila = useCallback(async (filaId: string) => {
+    if (!selectedCabecera) return;
+    const existing = detalles.find(d => d.costo_fila_id === filaId);
+    if (existing) {
+      await supabase.from('cotizacion_detalle').delete().eq('id', existing.id);
+      setDetalles(prev => prev.filter(d => d.id !== existing.id));
+      setValoresDinamicos(prev => prev.filter(v => v.detalle_id !== existing.id));
+    } else {
+      const fila = costoFilas.find(f => f.id === filaId);
+      if (!fila) return;
+      // Calculate costo_base from formula context
+      const costoBase = costoColumnas.reduce((sum, col) => {
+        if (col.tipo === 'texto' || col.tipo === 'select') return sum;
+        if (col.tipo === 'formula') {
+          const f = fila.formulas?.[col.id] ?? col.formula;
+          if (!f) return sum;
+          const mode = f.mode ?? 'terms';
+          const has = (mode === 'expression' && !!f.expression?.trim()) || (mode === 'terms' && (f.terminos?.length ?? 0) > 0);
+          return has ? sum + calcularFormula(f, formulaCtx, fila.subproceso) : sum;
+        }
+        const v = Number(fila.valores[col.id] ?? 0);
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0);
+
+      const { data: newDet } = await supabase.from('cotizacion_detalle').insert({
+        cabecera_id: selectedCabecera.id,
+        proceso: fila.proceso,
+        subproceso: fila.subproceso ?? '',
+        costo_base: costoBase,
+        multiplicador_base: 1,
+        total_final: costoBase,
+        orden: detalles.length,
+        notas_fila: '',
+        costo_fila_id: filaId,
+      }).select().maybeSingle();
+      if (newDet) setDetalles(prev => [...prev, newDet as CotizacionDetalle]);
+    }
+  }, [selectedCabecera, detalles, costoFilas, costoColumnas, formulaCtx]);
+
+  const handleSelectAllProceso = useCallback(async (proceso: string) => {
+    if (!selectedCabecera) return;
+    const toAdd = costoFilas.filter(f => f.proceso === proceso && !selectedFilaIds.has(f.id));
+    if (toAdd.length === 0) return;
+    const inserts = toAdd.map((f, idx) => {
+      const costoBase = costoColumnas.reduce((sum, col) => {
+        if (col.tipo === 'texto' || col.tipo === 'select') return sum;
+        if (col.tipo === 'formula') {
+          const fm = f.formulas?.[col.id] ?? col.formula;
+          if (!fm) return sum;
+          const mode = fm.mode ?? 'terms';
+          const has = (mode === 'expression' && !!fm.expression?.trim()) || (mode === 'terms' && (fm.terminos?.length ?? 0) > 0);
+          return has ? sum + calcularFormula(fm, formulaCtx, f.subproceso) : sum;
+        }
+        const v = Number(f.valores[col.id] ?? 0);
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0);
+      return {
+        cabecera_id: selectedCabecera.id,
+        proceso: f.proceso,
+        subproceso: f.subproceso ?? '',
+        costo_base: costoBase,
+        multiplicador_base: 1,
+        total_final: costoBase,
+        orden: detalles.length + idx,
+        notas_fila: '',
+        costo_fila_id: f.id,
+      };
+    });
+    const { data } = await supabase.from('cotizacion_detalle').insert(inserts).select();
+    if (data) setDetalles(prev => [...prev, ...(data as CotizacionDetalle[])]);
+  }, [selectedCabecera, costoFilas, selectedFilaIds, costoColumnas, formulaCtx, detalles.length]);
+
+  const handleDeselectAllProceso = useCallback(async (proceso: string) => {
+    if (!selectedCabecera) return;
+    const toRemove = detalles.filter(d => d.proceso === proceso);
+    if (toRemove.length === 0) return;
+    await supabase.from('cotizacion_detalle').delete().in('id', toRemove.map(d => d.id));
+    setDetalles(prev => prev.filter(d => d.proceso !== proceso));
+    setValoresDinamicos(prev => prev.filter(v => !toRemove.find(r => r.id === v.detalle_id)));
+  }, [selectedCabecera, detalles]);
+
+  // ─── Detalle updates ──────────────────────────────────────────────────────────
+  // Using regular functions (not useCallback) to completely avoid stale closures
+  async function handleUpdateDetalle(id: string, field: keyof CotizacionDetalle, value: number | string) {
+    const numericValue = field === 'multiplicador_base' ? parseFloat(String(value)) || 0 : value;
+
+    // Compute total using the value we just received
+    const det = detallesRef.current.find(d => d.id === id);
+    const costoBase = det?.costo_base ?? 0;
+    const multBase = field === 'multiplicador_base' ? (numericValue as number) : (det?.multiplicador_base ?? 1);
+    const total = costoBase * multBase;
+
+    // Update local state
+    setDetalles(prev => prev.map(d => d.id === id ? { ...d, [field]: numericValue, total_final: total } : d));
+
+    // DB update
+    await supabase.from('cotizacion_detalle').update({ [field]: numericValue, total_final: total }).eq('id', id);
+  }
+
+  async function handleUpdateValorDinamico(detalleId: string, columnaId: string, rawValue: string) {
+    const computed = parseFloat(rawValue) || 0;
+    const existing = valoresDinamicosRef.current.find(v => v.detalle_id === detalleId && v.columna_id === columnaId);
+
+    if (existing) {
+      setValoresDinamicos(prev => prev.map(v => v.id === existing.id ? { ...v, raw_value: rawValue, computed_value: computed } : v));
+      await supabase.from('cotizacion_valores_dinamicos').update({ raw_value: rawValue, computed_value: computed, updated_at: new Date().toISOString() }).eq('id', existing.id);
+    } else {
+      const { data } = await supabase.from('cotizacion_valores_dinamicos').insert({ detalle_id: detalleId, columna_id: columnaId, raw_value: rawValue, computed_value: computed }).select().maybeSingle();
+      if (data) setValoresDinamicos(prev => [...prev, data as CotizacionValorDinamico]);
+    }
+  }
+
+  async function handleRemoveDetalle(id: string) {
+    await supabase.from('cotizacion_detalle').delete().eq('id', id);
+    setDetalles(prev => prev.filter(d => d.id !== id));
+    setValoresDinamicos(prev => prev.filter(v => v.detalle_id !== id));
+  }
+
+  // ─── Columnas dinámicas CRUD ──────────────────────────────────────────────────
+  const handleAddColumnaDinamica = useCallback(async (data: Omit<CotizacionColumnaDinamica, 'id' | 'created_at'>) => {
+    const { data: newCol } = await supabase.from('cotizacion_columnas_dinamicas').insert(data).select().maybeSingle();
+    if (newCol) setColumnasDinamicas(prev => [...prev, newCol as CotizacionColumnaDinamica]);
+  }, []);
+
+  const handleUpdateColumnaDinamica = useCallback(async (id: string, data: Partial<CotizacionColumnaDinamica>) => {
+    await supabase.from('cotizacion_columnas_dinamicas').update(data).eq('id', id);
+    setColumnasDinamicas(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+  }, []);
+
+  const handleDeleteColumnaDinamica = useCallback(async (id: string) => {
+    await supabase.from('cotizacion_columnas_dinamicas').delete().eq('id', id);
+    setColumnasDinamicas(prev => prev.filter(c => c.id !== id));
+    // Limpiar valores dinámicos huérfanos de esa columna en el estado local
+    setValoresDinamicos(prev => prev.filter(v => v.columna_id !== id));
+  }, []);
+
+  const handleUpdateColumnaHeader = useCallback(async (id: string, newName: string) => {
+    await supabase.from('cotizacion_columnas_dinamicas').update({ name: newName.trim() }).eq('id', id);
+    setColumnasDinamicas(prev => prev.map(c => c.id === id ? { ...c, name: newName.trim() } : c));
+  }, []);
+
+  /**
+   * Sincroniza el renombre de una key en todas las fórmulas afectadas.
+   * Se llama desde AdminColumnasDinamicasModal cuando cambia la key de una columna.
+   */
+  const handleSyncKeyRename = useCallback(async (
+    updates: Map<string, string>,
+    totalFormulaUpdated?: string,
+  ) => {
+    if (updates.size === 0 && !totalFormulaUpdated) return;
+
+    // Actualizar fórmulas de columnas dinámicas
+    const updatePromises = Array.from(updates.entries()).map(([colId, newExpr]) =>
+      supabase
+        .from('cotizacion_columnas_dinamicas')
+        .update({ formula_expression: newExpr })
+        .eq('id', colId)
+    );
+    await Promise.all(updatePromises);
+
+    // Actualizar estado local de columnas
+    setColumnasDinamicas(prev =>
+      prev.map(c => updates.has(c.id) ? { ...c, formula_expression: updates.get(c.id)! } : c)
+    );
+
+    // Actualizar fórmula del total si fue afectada
+    if (totalFormulaUpdated !== undefined && selectedCabecera) {
+      const formula = totalFormulaUpdated.trim() || null;
+      setTotalFormula(formula ?? '');
+      setSelectedCabecera(prev => prev ? { ...prev, total_formula: formula } : prev);
+      setCabeceras(prev => prev.map(c => c.id === selectedCabecera.id ? { ...c, total_formula: formula } : c));
+      await supabase
+        .from('cotizacion_cabecera')
+        .update({ total_formula: formula, updated_at: new Date().toISOString() })
+        .eq('id', selectedCabecera.id);
+    }
+  }, [selectedCabecera]);
+
+  // ─── Reorder columnas dinámicas ────────────────────────────────────────────────────
+  const handleReorderColumnas = useCallback(async (orderedIds: string[]) => {
+    // Optimistic update
+    setColumnasDinamicas(prev => {
+      const map = new Map(prev.map(c => [c.id, c]));
+      return orderedIds
+        .map((id, idx) => map.get(id) ? { ...map.get(id)!, sort_order: idx } : null)
+        .filter(Boolean) as CotizacionColumnaDinamica[];
+    });
+    // Persist each sort_order to DB
+    await Promise.all(
+      orderedIds.map((id, idx) =>
+        supabase.from('cotizacion_columnas_dinamicas').update({ sort_order: idx }).eq('id', id)
+      )
+    );
+  }, []);
+
+  // ─── Fixed header update ──────────────────────────────────────────────────────
+  const handleUpdateFixedHeader = useCallback((key: keyof FixedColumnHeaders, newName: string) => {
+    if (!selectedCabecera) return;
+    setFixedHeaders(prev => {
+      const updated = { ...prev, [key]: newName };
+      localStorage.setItem(`fixed_headers_${selectedCabecera.id}`, JSON.stringify(updated));
+      return updated;
+    });
+  }, [selectedCabecera]);
+
+  const handleUpdateTotalFormula = useCallback(async (expression: string) => {
+    if (!selectedCabecera) return;
+    const formula = expression.trim() || null;
+    // Optimistic update
+    setTotalFormula(formula ?? '');
+    setSelectedCabecera(prev => prev ? { ...prev, total_formula: formula } : prev);
+    setCabeceras(prev => prev.map(c => c.id === selectedCabecera.id ? { ...c, total_formula: formula } : c));
+    // Persist to Supabase
+    await supabase
+      .from('cotizacion_cabecera')
+      .update({ total_formula: formula, updated_at: new Date().toISOString() })
+      .eq('id', selectedCabecera.id);
+  }, [selectedCabecera]);
+
+  // ─── Sincronizar costos base con valores actuales de costos_operacion ──────────
+  const [syncingCostos, setSyncingCostos] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(false);
+
+  const handleSyncCostosBase = useCallback(async () => {
+    if (!selectedCabecera || detalles.length === 0) return;
+    setSyncingCostos(true);
+    try {
+      const updates: { id: string; costo_base: number; total_final: number }[] = [];
+      for (const det of detalles) {
+        if (!det.costo_fila_id) continue;
+        const fila = costoFilas.find(f => f.id === det.costo_fila_id);
+        if (!fila) continue;
+        const newCostoBase = costoColumnas.reduce((sum, col) => {
+          if (col.tipo === 'texto' || col.tipo === 'select') return sum;
+          if (col.tipo === 'formula') {
+            const f = fila.formulas?.[col.id] ?? col.formula;
+            if (!f) return sum;
+            const mode = f.mode ?? 'terms';
+            const has = (mode === 'expression' && !!f.expression?.trim()) || (mode === 'terms' && (f.terminos?.length ?? 0) > 0);
+            return has ? sum + calcularFormula(f, formulaCtx, fila.subproceso) : sum;
+          }
+          const v = Number(fila.valores[col.id] ?? 0);
+          return sum + (isNaN(v) ? 0 : v);
+        }, 0);
+        const newTotal = newCostoBase * det.multiplicador_base;
+        if (Math.abs(newCostoBase - det.costo_base) > 0.001) {
+          updates.push({ id: det.id, costo_base: newCostoBase, total_final: newTotal });
+        }
+      }
+      if (updates.length > 0) {
+        await Promise.all(
+          updates.map(u =>
+            supabase.from('cotizacion_detalle').update({ costo_base: u.costo_base, total_final: u.total_final }).eq('id', u.id)
+          )
+        );
+        setDetalles(prev => prev.map(d => {
+          const upd = updates.find(u => u.id === d.id);
+          return upd ? { ...d, costo_base: upd.costo_base, total_final: upd.total_final } : d;
+        }));
+      }
+      setSyncSuccess(true);
+      setTimeout(() => setSyncSuccess(false), 3000);
+    } finally {
+      setSyncingCostos(false);
+    }
+  }, [selectedCabecera, detalles, costoFilas, costoColumnas, formulaCtx]);
+
+  // ─── Update total_general on cabecera ─────────────────────────────────────────
+  const handleSaveTotalGeneral = useCallback(async () => {
+    if (!selectedCabecera) return;
+    setSavingMult(true);
+    try {
+      // Persist all pending detalle values first (they are already saved on blur/enter,
+      // so here we just recalculate the grand total and update the cabecera header)
+      const { computeRowTotal } = await import('@/lib/cotizacionFormulaEngine');
+      const formula = selectedCabecera.total_formula?.trim() ?? '';
+      const totalLineas = detallesConValores.length;
+      const total = detallesConValores.reduce((sum, d) => {
+        return sum + computeRowTotal(d, columnasDinamicas, 1, formula || undefined, totalLineas);
+      }, 0);
+
+      skipDetallesReloadRef.current = true;
+      await supabase
+        .from('cotizacion_cabecera')
+        .update({ total_general: total, updated_at: new Date().toISOString() })
+        .eq('id', selectedCabecera.id);
+
+      setCabeceras(prev => prev.map(c => c.id === selectedCabecera.id ? { ...c, total_general: total } : c));
+      setSelectedCabecera(prev => prev ? { ...prev, total_general: total } : prev);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } finally {
+      setSavingMult(false);
+    }
+  }, [selectedCabecera, detallesConValores, columnasDinamicas]);
+
+  // ─── Comparativa: find previous period ───────────────────────────────────────
+  const previousCabecera = useMemo<CotizacionCabecera | null>(() => {
+    if (!selectedCabecera) return null;
+    const prevMes = selectedCabecera.mes === 1 ? 12 : selectedCabecera.mes - 1;
+    const prevAnio = selectedCabecera.mes === 1 ? selectedCabecera.anio - 1 : selectedCabecera.anio;
+    return cabeceras.find(c =>
+      c.cliente === selectedCabecera.cliente &&
+      c.mes === prevMes &&
+      c.anio === prevAnio &&
+      c.id !== selectedCabecera.id
+    ) ?? null;
+  }, [selectedCabecera, cabeceras]);
+
+  const [previousDetalles, setPreviousDetalles] = useState<CotizacionDetalle[]>([]);
+  useEffect(() => {
+    if (showComparativa && previousCabecera) {
+      supabase.from('cotizacion_detalle').select('*').eq('cabecera_id', previousCabecera.id).then(({ data }) => {
+        setPreviousDetalles((data as CotizacionDetalle[]) ?? []);
+      });
+    }
+  }, [showComparativa, previousCabecera]);
+
+  // ─── Next version for duplicate ───────────────────────────────────────────────
+  const nextVersion = useMemo(() => {
+    if (!duplicatingFrom) return 1;
+    const same = cabeceras.filter(c => c.cliente === duplicatingFrom.cliente);
+    return Math.max(...same.map(c => c.version), 0) + 1;
+  }, [duplicatingFrom, cabeceras]);
 
   if (loading) {
     return (
@@ -299,151 +718,203 @@ export default function CotizacionesPage() {
     );
   }
 
+  const cfg = selectedCabecera ? ESTADO_V2_CONFIG[selectedCabecera.estado] : null;
+
   return (
     <AppLayout
       title="Cotizaciones"
-      subtitle="Arma cotizaciones dinámicas basadas en los costos por operación"
+      subtitle="Sistema de cotizaciones mensuales por cliente con historial y versiones"
       actions={
-        selectedCot && (
-          <div className="flex items-center gap-2">
-            {savingGlobal && <span className="text-xs text-slate-400">Guardando...</span>}
-            <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
-              <div className="w-4 h-4 flex items-center justify-center">
-                <i className="ri-close-line text-orange-500 text-sm" />
-              </div>
-              <span className="text-xs text-orange-600 font-semibold whitespace-nowrap">Mult. global:</span>
-              <input
-                type="number"
-                value={selectedCot.sim_multiplier}
-                onChange={e => {
-                  const v = parseFloat(e.target.value);
-                  if (!isNaN(v) && v > 0) handleUpdateGlobalMult(v);
-                }}
-                step="any"
-                min="0"
-                className="w-16 bg-white border border-orange-300 rounded px-2 py-1 text-xs font-bold text-orange-700 focus:outline-none text-center"
-              />
+        selectedCabecera && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Sync costos */}
+            <div className="relative">
+              <button
+                onClick={handleSyncCostosBase}
+                disabled={syncingCostos}
+                className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:border-amber-300 text-slate-600 hover:text-amber-700 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+                title="Recalcula el costo base de cada proceso con los valores actuales de Costos por Operación"
+              >
+                {syncingCostos ? (
+                  <><div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />Sincronizando...</>
+                ) : (
+                  <><i className="ri-refresh-line text-sm" />Sincronizar costos</>
+                )}
+              </button>
+              {syncSuccess && (
+                <div className="absolute right-0 top-full mt-2 z-50 flex items-center gap-2 bg-amber-600 text-white text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap">
+                  <i className="ri-checkbox-circle-line text-sm" />
+                  Costos actualizados
+                </div>
+              )}
             </div>
+            {/* Comparativa */}
             <button
-              onClick={() => setShowPDF(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+              onClick={() => setShowComparativa(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-800 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
             >
-              <div className="w-4 h-4 flex items-center justify-center">
-                <i className="ri-printer-line" />
-              </div>
-              Exportar PDF
+              <i className="ri-bar-chart-2-line text-sm" />
+              Comparar
             </button>
+            {/* Admin columnas */}
+            <button
+              onClick={() => setShowAdminColumnas(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-800 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-table-alt-line text-sm" />
+              Columnas
+            </button>
+            {/* Save total */}
+            <div className="relative">
+              <button
+                onClick={handleSaveTotalGeneral}
+                disabled={savingMult}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+              >
+                {savingMult ? (
+                  <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Guardando...</>
+                ) : (
+                  <><i className="ri-save-line text-sm" />Guardar total</>
+                )}
+              </button>
+              {saveSuccess && (
+                <div className="absolute right-0 top-full mt-2 z-50 flex items-center gap-2 bg-emerald-600 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow-lg whitespace-nowrap animate-fade-in">
+                  <i className="ri-checkbox-circle-line text-sm" />
+                  Total guardado correctamente
+                </div>
+              )}
+            </div>
           </div>
         )
       }
     >
       <div className="flex gap-5 h-[calc(100vh-140px)]">
-        {/* Left panel: list + selector */}
-        <div className="flex flex-col gap-4 w-72 flex-shrink-0">
-          {/* Cotizaciones list */}
-          <div style={{ height: 280 }}>
-            <CotizacionesList
-              cotizaciones={cotizaciones}
-              selectedId={selectedCot?.id ?? null}
-              onSelect={setSelectedCot}
-              onNew={() => { setEditingCot(null); setShowFormModal(true); }}
-              onEdit={c => { setEditingCot(c); setShowFormModal(true); }}
-              onDelete={handleDeleteCot}
-            />
-          </div>
-
-          {/* Row selector */}
-          {selectedCot ? (
-            <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Seleccionar subprocesos</p>
-                <p className="text-xs text-slate-400 mt-0.5">Clic para agregar o quitar de la cotización</p>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                {loadingItems ? (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                  </div>
-                ) : (
-                  <CotizacionRowSelector
-                    filas={costoFilas}
-                    columnas={costoColumnas}
-                    formulaCtx={formulaCtx}
-                    selectedIds={selectedIds}
-                    onToggle={handleToggle}
-                    onSelectAll={handleSelectAll}
-                    onDeselectAll={handleDeselectAll}
-                  />
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 bg-white rounded-xl border border-slate-200 border-dashed flex flex-col items-center justify-center gap-3 text-center p-6">
-              <div className="w-12 h-12 flex items-center justify-center rounded-full bg-slate-100">
-                <i className="ri-arrow-left-up-line text-xl text-slate-400" />
-              </div>
-              <p className="text-sm text-slate-500 font-medium">Selecciona una cotización</p>
-              <p className="text-xs text-slate-400">o crea una nueva para empezar a armar la tabla</p>
-            </div>
-          )}
+        {/* ── Sidebar ─────────────────────────────────────────────────────────── */}
+        <div className="w-72 flex-shrink-0 h-full">
+          <CotizacionSidebar
+            cotizaciones={cabeceras}
+            selectedId={selectedCabecera?.id ?? null}
+            onSelect={setSelectedCabecera}
+            onNew={() => { setEditingCabecera(null); setShowNuevaModal(true); }}
+            onDuplicate={c => setDuplicatingFrom(c)}
+            onDelete={handleDeleteCabecera}
+          />
         </div>
 
-        {/* Right panel: cotizacion table */}
-        <div className="flex-1 min-w-0 flex flex-col">
-          {selectedCot ? (
+        {/* ── Main content ─────────────────────────────────────────────────────── */}
+        <div className="flex-1 min-w-0 flex flex-col gap-4">
+          {selectedCabecera ? (
             <>
-              {/* Header */}
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800">{selectedCot.nombre}</h2>
-                  <div className="flex items-center gap-3 mt-1">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-4 h-4 flex items-center justify-center">
-                        <i className="ri-building-4-line text-xs text-slate-400" />
-                      </div>
-                      <span className="text-sm text-slate-500">{selectedCot.cliente}</span>
+              {/* Cabecera info bar */}
+              <div className="bg-white rounded-xl border border-slate-200 px-5 py-4 flex items-start justify-between gap-4 flex-shrink-0">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 flex items-center justify-center rounded-xl bg-emerald-100 flex-shrink-0">
+                    <i className="ri-building-4-line text-emerald-600" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base font-bold text-slate-800">{selectedCabecera.cliente}</h2>
+                      {cfg && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${cfg.color}`}>
+                          <i className={`${cfg.icon} mr-1`} />
+                          {cfg.label}
+                        </span>
+                      )}
+                      <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                        {MESES[selectedCabecera.mes - 1]} {selectedCabecera.anio} · v{selectedCabecera.version}
+                      </span>
+                      <span className="text-xs text-slate-400">{selectedCabecera.moneda}</span>
                     </div>
-                    {selectedCot.descripcion && (
-                      <span className="text-xs text-slate-400 truncate max-w-xs">{selectedCot.descripcion}</span>
+                    {selectedCabecera.notas && (
+                      <p className="text-xs text-slate-500 mt-1.5 max-w-lg">{selectedCabecera.notas}</p>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-xs text-slate-400">
-                    {tableItems.length} ítem{tableItems.length !== 1 ? 's' : ''} seleccionado{tableItems.length !== 1 ? 's' : ''}
-                  </span>
+                  <button
+                    onClick={() => { setEditingCabecera(selectedCabecera); setShowNuevaModal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 hover:border-slate-300 text-slate-600 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-pencil-line text-xs" />
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => setDuplicatingFrom(selectedCabecera)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 hover:border-slate-300 text-slate-600 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-file-copy-line text-xs" />
+                    Duplicar
+                  </button>
                 </div>
               </div>
 
-              {/* Table */}
-              <div className="flex-1 overflow-y-auto">
-                <CotizacionTable
-                  items={tableItems}
-                  columnas={costoColumnas}
-                  formulaCtx={formulaCtx}
-                  onUpdateMultiplier={handleUpdateMultiplier}
-                  onUpdateNota={handleUpdateNota}
-                  onRemoveItem={handleRemoveItem}
-                  onUpdateFormulaOverride={handleUpdateFormulaOverride}
-                  onClearFormulaOverride={handleClearFormulaOverride}
-                  globalMultiplier={selectedCot.sim_multiplier}
-                  columnasVisibles={columnasVisibles}
-                  onToggleColumna={handleToggleColumna}
-                />
+              {/* Content: selector + table */}
+              <div className="flex gap-4 flex-1 min-h-0">
+                {/* Subproceso selector */}
+                <div className="w-56 flex-shrink-0 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col">
+                  <div className="px-3 py-3 border-b border-slate-100 flex-shrink-0">
+                    <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Subprocesos</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{detalles.length} seleccionados</p>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    {loadingDetalles ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : (
+                      <CotizacionSubprocesoSelector
+                        filas={costoFilas}
+                        selectedIds={selectedFilaIds}
+                        onToggle={handleToggleFila}
+                        onSelectAll={handleSelectAllProceso}
+                        onDeselectAll={handleDeselectAllProceso}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div className="flex-1 min-w-0 overflow-y-auto">
+                  {loadingDetalles ? (
+                    <div className="flex items-center justify-center py-16 bg-white rounded-xl border border-slate-200">
+                      <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : (
+                    <CotizacionDetalleTable
+                      detalles={detallesConValores}
+                      columnasDinamicas={columnasDinamicas}
+                      moneda={selectedCabecera.moneda}
+                      globalMultiplier={1}
+                      totalLineas={detallesConValores.length}
+                      onUpdateDetalle={handleUpdateDetalle}
+                      onUpdateValorDinamico={handleUpdateValorDinamico}
+                      onRemoveDetalle={handleRemoveDetalle}
+                      onUpdateColumnaHeader={handleUpdateColumnaHeader}
+                      onReorderColumnas={handleReorderColumnas}
+                      fixedHeaders={fixedHeaders}
+                      onUpdateFixedHeader={handleUpdateFixedHeader}
+                      totalFormula={totalFormula}
+                      onUpdateTotalFormula={handleUpdateTotalFormula}
+                    />
+                  )}
+                </div>
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-white rounded-xl border border-slate-200 border-dashed">
-              <div className="w-16 h-16 flex items-center justify-center rounded-full bg-slate-100">
-                <i className="ri-file-list-3-line text-2xl text-slate-400" />
+            /* Empty state */
+            <div className="flex-1 flex flex-col items-center justify-center gap-5 bg-white rounded-xl border border-slate-200 border-dashed">
+              <div className="w-20 h-20 flex items-center justify-center rounded-2xl bg-slate-100">
+                <i className="ri-file-list-3-line text-3xl text-slate-400" />
               </div>
               <div className="text-center">
-                <p className="text-slate-600 font-semibold">Ninguna cotización seleccionada</p>
-                <p className="text-slate-400 text-sm mt-1">Selecciona una cotización de la lista o crea una nueva</p>
+                <p className="text-slate-700 font-bold text-lg">Ninguna cotización seleccionada</p>
+                <p className="text-slate-400 text-sm mt-1.5 max-w-sm">
+                  Selecciona una cotización del historial o crea una nueva para empezar
+                </p>
               </div>
               <button
-                onClick={() => { setEditingCot(null); setShowFormModal(true); }}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap"
+                onClick={() => { setEditingCabecera(null); setShowNuevaModal(true); }}
+                className="flex items-center gap-2 px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
               >
                 <i className="ri-add-line" />
                 Nueva cotización
@@ -453,23 +924,57 @@ export default function CotizacionesPage() {
         </div>
       </div>
 
-      {/* Form modal */}
-      {showFormModal && (
-        <CotizacionFormModal
-          editing={editingCot}
-          onClose={() => { setShowFormModal(false); setEditingCot(null); }}
-          onSave={handleSaveCot}
+      {/* ── Modals ──────────────────────────────────────────────────────────────── */}
+      {showNuevaModal && (
+        <NuevaCotizacionModal
+          editing={editingCabecera}
+          defaultCliente={selectedCabecera?.cliente}
+          onClose={() => { setShowNuevaModal(false); setEditingCabecera(null); }}
+          onSave={handleSaveCabecera}
         />
       )}
 
-      {/* PDF preview */}
-      {showPDF && selectedCot && (
-        <CotizacionPDFPreview
-          cotizacion={selectedCot}
-          items={tableItems}
-          columnas={costoColumnas}
-          formulaCtx={formulaCtx}
-          onClose={() => setShowPDF(false)}
+      {duplicatingFrom && (
+        <DuplicarCotizacionModal
+          source={duplicatingFrom}
+          nextVersion={nextVersion}
+          onClose={() => setDuplicatingFrom(null)}
+          onConfirm={handleDuplicate}
+        />
+      )}
+
+      {showAdminColumnas && (() => {
+        // Construir valores REALES de preview usando el motor de cálculo acumulado
+        const firstRow = detallesConValores[0];
+        const nLineas = detallesConValores.length;
+        let adminPreviewValues: Record<string, number> | undefined;
+        if (firstRow) {
+          // buildRowVarContext aplica raw_values reales de columnas dinámicas
+          // (cantidad_lineas, cantidad_unidades vienen del raw_value de la fila, no del sistema)
+          const fullCtx = buildRowVarContext(firstRow, columnasDinamicas, Infinity, 1, nLineas);
+          adminPreviewValues = { ...fullCtx };
+        }
+        return (
+          <AdminColumnasDinamicasModal
+            columnas={columnasDinamicas}
+            onClose={() => setShowAdminColumnas(false)}
+            onAdd={handleAddColumnaDinamica}
+            onUpdate={handleUpdateColumnaDinamica}
+            onDelete={handleDeleteColumnaDinamica}
+            totalFormula={totalFormula}
+            onSyncKeyRename={handleSyncKeyRename}
+            previewRowValues={adminPreviewValues}
+          />
+        );
+      })()}
+
+      {showComparativa && selectedCabecera && (
+        <CotizacionComparativa
+          current={selectedCabecera}
+          previous={previousCabecera}
+          currentDetalles={detalles}
+          previousDetalles={previousDetalles}
+          onClose={() => setShowComparativa(false)}
         />
       )}
     </AppLayout>

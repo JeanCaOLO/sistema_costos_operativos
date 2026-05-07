@@ -32,7 +32,6 @@ serve(async (req) => {
       { data: volFilData, error: e10 },
       { data: empData, error: e11 },
       { data: volConfigData },
-      { data: simConfigData },
     ] = await Promise.all([
       supabase.from('costos_columnas').select('*').order('orden'),
       supabase.from('costos_operacion').select('*').order('orden'),
@@ -46,7 +45,6 @@ serve(async (req) => {
       supabase.from('volumenes').select('id, proceso, subproceso, valores'),
       supabase.from('mano_obra_empleados').select('*').eq('is_active', true),
       supabase.from('app_config').select('value').eq('key', 'vol_promedio_lastN').maybeSingle(),
-      supabase.from('app_config').select('value').eq('key', 'sim_multiplier').maybeSingle(),
     ]);
 
     const errors = [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
@@ -59,10 +57,6 @@ serve(async (req) => {
       recibido: typeof rawVolConfig?.recibido === 'number' ? rawVolConfig.recibido : 0,
       despachado: typeof rawVolConfig?.despachado === 'number' ? rawVolConfig.despachado : 0,
     };
-
-    // Extraer multiplicador de simulación desde app_config
-    const rawSimValue = (simConfigData as { value?: number } | null)?.value;
-    const simMultiplier = typeof rawSimValue === 'number' ? rawSimValue : 1;
 
     return new Response(
       JSON.stringify({
@@ -78,7 +72,6 @@ serve(async (req) => {
         volFilData: volFilData ?? [],
         empData: empData ?? [],
         volLastN,
-        simMultiplier,
         _errors: errors.length > 0 ? errors : undefined,
       }),
       {

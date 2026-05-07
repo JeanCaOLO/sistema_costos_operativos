@@ -7,6 +7,7 @@ import type { InversionRecord } from '@/types/inversion';
 import { calcularInversion, esFinanciamiento } from '@/types/inversion';
 import type { EmpleadoImportado } from '@/types/mano_obra_empleados';
 import { readAllLastN } from '@/hooks/useVolumenesPromedioConfig';
+import type { Factor } from '@/types/factores';
 
 // ── Data types for each module ──────────────────────────────────────────────
 export interface DynamicColumnItem {
@@ -35,12 +36,27 @@ export interface AreaDistItem {
   global_distribution_percentage: number;
   categoria?: string;
   category_distribution_percentage?: number;
+  // ── Distribución cúbica (m³) ────────────────────────────────────────────
+  global_distribution_cubic_percentage?: number;
+  category_distribution_cubic_percentage?: number;
 }
 
 export interface AreaDataItem {
   nombre: string;
   metros_cuadrados: number;
   cantidad_racks: number;
+  metros_cubicos: number;
+  costo_area: number;
+}
+
+export interface VolDistribucionItem {
+  id: string;
+  nombre: string;
+  porcentaje: number;
+  porcentaje_inbound: number;
+  porcentaje_outbound: number;
+  categoria: string;   // 'Inbound' | 'Outbound'
+  is_active: boolean;
 }
 
 export interface AllDataSources {
@@ -56,6 +72,9 @@ export interface AllDataSources {
   costosFilas: DynamicRowItem[];
   areaDistribucion: AreaDistItem[];
   areasData: AreaDataItem[];
+  volDistribucion?: VolDistribucionItem[];
+  /** Factores registrados en el módulo de Factores */
+  factores?: Factor[];
 }
 
 export const EMPTY_DATA_SOURCES: AllDataSources = {
@@ -71,10 +90,12 @@ export const EMPTY_DATA_SOURCES: AllDataSources = {
   costosFilas: [],
   areaDistribucion: [],
   areasData: [],
+  volDistribucion: [],
+  factores: [],
 };
 
 // ── Variable group definitions ───────────────────────────────────────────────
-export type VarGroup = 'inversiones' | 'gastos_varios' | 'mano_obra' | 'volumenes' | 'costos' | 'distribucion' | 'areas';
+export type VarGroup = 'inversiones' | 'gastos_varios' | 'mano_obra' | 'volumenes' | 'costos' | 'distribucion' | 'distribucion_cubica' | 'areas' | 'vol_distribucion' | 'factores';
 
 export interface VariableDef {
   token: string;
@@ -826,6 +847,203 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
     }
   });
 
+  // ── DISTRIBUCIÓN CÚBICA (m³) ─────────────────────────────────────────────
+  // Variables equivalentes a distribución pero usando metros cúbicos como base.
+  // Los datos vienen desde areaDistribucion con campos *_cubic_percentage.
+
+  defs.push({
+    token: 'DIST_CUBIC_FILA',
+    label: 'Distribución Cúbica: % Global del área de la fila',
+    description: 'Fracción decimal del % global de distribución CÚBICA del área de la fila (ej: 25% → 0.25). Basado en m³.',
+    group: 'distribucion_cubica',
+    icon: 'ri-box-3-line',
+    tagColor: 'bg-cyan-100 text-cyan-700',
+    computeValue: (d, rowSubproceso) => {
+      if (!rowSubproceso) return 0;
+      const found = d.areaDistribucion.find(
+        a => a.area_name?.toLowerCase().trim() === rowSubproceso.toLowerCase().trim()
+      );
+      return (found?.global_distribution_cubic_percentage ?? 0) / 100;
+    },
+  });
+
+  defs.push({
+    token: 'DIST_CUBIC_FILA_CAT',
+    label: 'Distribución Cúbica: % de Categoría del área de la fila',
+    description: 'Fracción decimal del % dentro de su categoría (Interior o Exterior) del área de la fila, usando m³.',
+    group: 'distribucion_cubica',
+    icon: 'ri-box-3-line',
+    tagColor: 'bg-cyan-100 text-cyan-700',
+    computeValue: (d, rowSubproceso) => {
+      if (!rowSubproceso) return 0;
+      const found = d.areaDistribucion.find(
+        a => a.area_name?.toLowerCase().trim() === rowSubproceso.toLowerCase().trim()
+      );
+      return (found?.category_distribution_cubic_percentage ?? 0) / 100;
+    },
+  });
+
+  data.areaDistribucion.forEach(area => {
+    const token = `DIST_CUBIC_${sanitizeAreaToken(area.area_name)}`;
+    const pct = area.global_distribution_cubic_percentage ?? 0;
+    if (pct > 0) {
+      defs.push({
+        token,
+        label: `Dist. Cúbica Global: ${area.area_name} (${pct.toFixed(1)}% → fracción)`,
+        description: `Fracción decimal del % global CÚBICO del área "${area.area_name}" (${pct.toFixed(1)}% ÷ 100 = ${(pct / 100).toFixed(4)})`,
+        group: 'distribucion_cubica',
+        icon: 'ri-box-3-line',
+        tagColor: 'bg-cyan-100 text-cyan-700',
+        computeValue: () => pct / 100,
+      });
+    }
+
+    const catPct = area.category_distribution_cubic_percentage ?? 0;
+    if (catPct > 0 && area.categoria) {
+      const catToken = `DIST_CUBIC_${area.categoria === 'Interior' ? 'INT' : area.categoria === 'Exterior' ? 'EXT' : sanitizeAreaToken(area.categoria)}_${sanitizeAreaToken(area.area_name)}`;
+      const catLabel = area.categoria === 'Interior' ? 'Interior' : area.categoria === 'Exterior' ? 'Exterior' : area.categoria;
+      defs.push({
+        token: catToken,
+        label: `Dist. Cúbica ${catLabel}: ${area.area_name} (${catPct.toFixed(1)}%)`,
+        description: `Fracción decimal del % CÚBICO de "${area.area_name}" dentro de ${catLabel} (${catPct.toFixed(1)}% ÷ 100 = ${(catPct / 100).toFixed(4)})`,
+        group: 'distribucion_cubica',
+        icon: area.categoria === 'Interior' ? 'ri-home-4-line' : 'ri-sun-line',
+        tagColor: area.categoria === 'Interior' ? 'bg-amber-100 text-amber-700' : 'bg-sky-100 text-sky-700',
+        computeValue: () => catPct / 100,
+      });
+    }
+  });
+
+  // ── DISTRIBUCIÓN DE VOLUMEN ──────────────────────────────────────────────
+  const volDistItems = (data.volDistribucion ?? []).filter(v => v.is_active);
+  const volDistInbound  = volDistItems.filter(v => v.categoria === 'Inbound');
+  const volDistOutbound = volDistItems.filter(v => v.categoria === 'Outbound');
+
+  if (volDistItems.length > 0) {
+    // ── Totales por categoría ──
+    defs.push({
+      token: 'VOLDIST_INBOUND_TOTAL',
+      label: 'Dist. Volumen Inbound: Total (%)',
+      description: 'Suma de todos los % de distribución Inbound activos (fracción decimal)',
+      group: 'vol_distribucion',
+      icon: 'ri-arrow-down-circle-line',
+      tagColor: 'bg-emerald-100 text-emerald-700',
+      computeValue: () => volDistInbound.reduce((s, v) => s + (v.porcentaje_inbound ?? 0), 0) / 100,
+    });
+
+    defs.push({
+      token: 'VOLDIST_OUTBOUND_TOTAL',
+      label: 'Dist. Volumen Outbound: Total (%)',
+      description: 'Suma de todos los % de distribución Outbound activos (fracción decimal)',
+      group: 'vol_distribucion',
+      icon: 'ri-arrow-up-circle-line',
+      tagColor: 'bg-sky-100 text-sky-700',
+      computeValue: () => volDistOutbound.reduce((s, v) => s + (v.porcentaje_outbound ?? 0), 0) / 100,
+    });
+
+    // ── Variables por segmento Inbound ──
+    volDistInbound.forEach(vd => {
+      const baseToken = vd.nombre.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+      const pct = vd.porcentaje_inbound ?? 0;
+
+      // Token con prefijo IN_ (legacy)
+      defs.push({
+        token: `VOLDIST_IN_${baseToken}`,
+        label: `Inbound: ${vd.nombre} (${pct.toFixed(2)}%)`,
+        description: `Fracción decimal del % Inbound de "${vd.nombre}" (${pct.toFixed(2)}% ÷ 100 = ${(pct / 100).toFixed(4)})`,
+        group: 'vol_distribucion',
+        icon: 'ri-arrow-down-circle-line',
+        tagColor: 'bg-emerald-100 text-emerald-700',
+        computeValue: () => pct / 100,
+      });
+
+      // Token directo sin prefijo IN_ (ej: VOLDIST_RECIBO_NACIONALIZADO)
+      defs.push({
+        token: `VOLDIST_${baseToken}`,
+        label: `Inbound: ${vd.nombre} (${pct.toFixed(2)}%)`,
+        description: `Fracción decimal del % Inbound de "${vd.nombre}" (${pct.toFixed(2)}% ÷ 100 = ${(pct / 100).toFixed(4)})`,
+        group: 'vol_distribucion',
+        icon: 'ri-arrow-down-circle-line',
+        tagColor: 'bg-emerald-100 text-emerald-700',
+        computeValue: () => pct / 100,
+      });
+    });
+
+    // ── Variables TOTAL combinado IN+OUT ──────────────────────────────────
+    // Calcula el % de cada segmento sobre el total de unidades combinadas (IN+OUT)
+    const totalUnidadesCombinadas = volDistItems.reduce((s, v) => s + (v.unidades ?? 0), 0);
+
+    // Siempre generar los tokens VOLDIST_TOTAL_* — si no hay unidades, valen 0
+    volDistItems.forEach(vd => {
+      const baseToken = vd.nombre.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+      const pctTotal = totalUnidadesCombinadas > 0 ? (vd.unidades / totalUnidadesCombinadas) * 100 : 0;
+
+      defs.push({
+        token: `VOLDIST_TOTAL_${baseToken}`,
+        label: `Total IN+OUT: ${vd.nombre} (${pctTotal.toFixed(2)}%)`,
+        description: `Fracción decimal del % de "${vd.nombre}" sobre el total combinado IN+OUT (${pctTotal.toFixed(2)}% ÷ 100 = ${(pctTotal / 100).toFixed(4)})`,
+        group: 'vol_distribucion',
+        icon: vd.categoria === 'Inbound' ? 'ri-arrow-down-circle-line' : 'ri-arrow-up-circle-line',
+        tagColor: vd.categoria === 'Inbound' ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700',
+        computeValue: () => pctTotal / 100,
+      });
+    });
+
+    // Totales IN y OUT sobre el combinado
+    const udsIn  = volDistInbound.reduce((s, v)  => s + (v.unidades ?? 0), 0);
+    const udsOut = volDistOutbound.reduce((s, v) => s + (v.unidades ?? 0), 0);
+    const pctInTotal  = totalUnidadesCombinadas > 0 ? (udsIn  / totalUnidadesCombinadas) * 100 : 0;
+    const pctOutTotal = totalUnidadesCombinadas > 0 ? (udsOut / totalUnidadesCombinadas) * 100 : 0;
+
+    defs.push({
+      token: 'VOLDIST_TOTAL_INBOUND',
+      label: `Total IN sobre combinado (${pctInTotal.toFixed(2)}%)`,
+      description: `Fracción decimal del % Inbound sobre el total combinado IN+OUT`,
+      group: 'vol_distribucion',
+      icon: 'ri-arrow-down-circle-line',
+      tagColor: 'bg-emerald-100 text-emerald-700',
+      computeValue: () => pctInTotal / 100,
+    });
+
+    defs.push({
+      token: 'VOLDIST_TOTAL_OUTBOUND',
+      label: `Total OUT sobre combinado (${pctOutTotal.toFixed(2)}%)`,
+      description: `Fracción decimal del % Outbound sobre el total combinado IN+OUT`,
+      group: 'vol_distribucion',
+      icon: 'ri-arrow-up-circle-line',
+      tagColor: 'bg-sky-100 text-sky-700',
+      computeValue: () => pctOutTotal / 100,
+    });
+
+    // ── Variables por segmento Outbound ──
+    volDistOutbound.forEach(vd => {
+      const baseToken = vd.nombre.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+      const pct = vd.porcentaje_outbound ?? 0;
+
+      // Token con prefijo OUT_ (legacy)
+      defs.push({
+        token: `VOLDIST_OUT_${baseToken}`,
+        label: `Outbound: ${vd.nombre} (${pct.toFixed(2)}%)`,
+        description: `Fracción decimal del % Outbound de "${vd.nombre}" (${pct.toFixed(2)}% ÷ 100 = ${(pct / 100).toFixed(4)})`,
+        group: 'vol_distribucion',
+        icon: 'ri-arrow-up-circle-line',
+        tagColor: 'bg-sky-100 text-sky-700',
+        computeValue: () => pct / 100,
+      });
+
+      // Token directo sin prefijo OUT_ (ej: VOLDIST_DESPACHO_NACIONALIZADO)
+      defs.push({
+        token: `VOLDIST_${baseToken}`,
+        label: `Outbound: ${vd.nombre} (${pct.toFixed(2)}%)`,
+        description: `Fracción decimal del % Outbound de "${vd.nombre}" (${pct.toFixed(2)}% ÷ 100 = ${(pct / 100).toFixed(4)})`,
+        group: 'vol_distribucion',
+        icon: 'ri-arrow-up-circle-line',
+        tagColor: 'bg-sky-100 text-sky-700',
+        computeValue: () => pct / 100,
+      });
+    });
+  }
+
   // ── ÁREAS: M² Y RACKS ────────────────────────────────────────────────────
   defs.push({
     token: 'TOTAL_M2',
@@ -835,6 +1053,16 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
     icon: 'ri-layout-grid-line',
     tagColor: 'bg-orange-100 text-orange-700',
     computeValue: (d) => d.areasData.reduce((s, a) => s + (a.metros_cuadrados ?? 0), 0),
+  });
+
+  defs.push({
+    token: 'TOTAL_M3',
+    label: 'Total M³ (todas las áreas)',
+    description: 'Suma de metros cúbicos de todas las áreas registradas',
+    group: 'areas',
+    icon: 'ri-box-3-line',
+    tagColor: 'bg-orange-100 text-orange-700',
+    computeValue: (d) => d.areasData.reduce((s, a) => s + (a.metros_cubicos ?? 0), 0),
   });
 
   defs.push({
@@ -858,6 +1086,16 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
   });
 
   defs.push({
+    token: 'M3_FILA',
+    label: 'M³ del área de la fila',
+    description: 'Metros cúbicos del área que corresponde al subproceso de cada fila. Devuelve 0 si el área no tiene m³ definido.',
+    group: 'areas',
+    icon: 'ri-box-3-line',
+    tagColor: 'bg-orange-100 text-orange-700',
+    computeValue: (d, rowSubproceso) => findArea(d, rowSubproceso)?.metros_cubicos ?? 0,
+  });
+
+  defs.push({
     token: 'RACKS_FILA',
     label: 'Racks del área de la fila',
     description: 'Cantidad de racks del área que corresponde al subproceso de cada fila',
@@ -865,6 +1103,27 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
     icon: 'ri-server-line',
     tagColor: 'bg-orange-100 text-orange-700',
     computeValue: (d, rowSubproceso) => findArea(d, rowSubproceso)?.cantidad_racks ?? 0,
+  });
+
+  // ── COSTO DE ÁREA ────────────────────────────────────────────────────────
+  defs.push({
+    token: 'TOTAL_COSTO_AREA',
+    label: 'Total Costo de Áreas',
+    description: 'Suma del costo de todas las áreas (por fórmula o por tipo×m²)',
+    group: 'areas',
+    icon: 'ri-money-dollar-circle-line',
+    tagColor: 'bg-orange-100 text-orange-700',
+    computeValue: (d) => d.areasData.reduce((s, a) => s + (a.costo_area ?? 0), 0),
+  });
+
+  defs.push({
+    token: 'COSTO_AREA_FILA',
+    label: 'Costo del Área de la fila',
+    description: 'Costo calculado del área que corresponde al subproceso de cada fila. Devuelve 0 si no hay área o no tiene costo definido.',
+    group: 'areas',
+    icon: 'ri-money-dollar-circle-line',
+    tagColor: 'bg-orange-100 text-orange-700',
+    computeValue: (d, rowSubproceso) => findArea(d, rowSubproceso)?.costo_area ?? 0,
   });
 
   // Per-area variables
@@ -880,6 +1139,18 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
       computeValue: () => area.metros_cuadrados ?? 0,
     });
 
+    if ((area.metros_cubicos ?? 0) > 0) {
+      defs.push({
+        token: `M3_${sanitized}`,
+        label: `M³: ${area.nombre}`,
+        description: `Metros cúbicos del área "${area.nombre}" (${area.metros_cubicos} m³)`,
+        group: 'areas',
+        icon: 'ri-box-3-line',
+        tagColor: 'bg-orange-100 text-orange-700',
+        computeValue: () => area.metros_cubicos ?? 0,
+      });
+    }
+
     if ((area.cantidad_racks ?? 0) > 0) {
       defs.push({
         token: `RACKS_${sanitized}`,
@@ -891,7 +1162,36 @@ export function buildVariableDefs(data: AllDataSources): VariableDef[] {
         computeValue: () => area.cantidad_racks ?? 0,
       });
     }
+
+    if ((area.costo_area ?? 0) > 0) {
+      defs.push({
+        token: `COSTO_AREA_${sanitized}`,
+        label: `Costo: ${area.nombre}`,
+        description: `Costo calculado del área "${area.nombre}" (${(area.costo_area ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD)`,
+        group: 'areas',
+        icon: 'ri-money-dollar-circle-line',
+        tagColor: 'bg-orange-100 text-orange-700',
+        computeValue: () => area.costo_area ?? 0,
+      });
+    }
   });
+
+  // ── FACTORES ───────────────────────────────────────────────────────────────
+  const factores = data.factores ?? [];
+  if (factores.length > 0) {
+    factores.forEach(factor => {
+      const token = `FACTOR_${factor.nombre.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}`;
+      defs.push({
+        token,
+        label: `Factor: ${factor.nombre}`,
+        description: factor.descripcion || `Valor del factor "${factor.nombre}" (${factor.valor})`,
+        group: 'factores',
+        icon: 'ri-equalizer-line',
+        tagColor: 'bg-amber-100 text-amber-700',
+        computeValue: () => factor.valor ?? 0,
+      });
+    });
+  }
 
   return defs;
 }
@@ -914,11 +1214,14 @@ export function buildVariableMap(
 }
 
 export const GROUP_META: Record<VarGroup, { label: string; icon: string; color: string }> = {
-  inversiones:   { label: 'Inversiones',         icon: 'ri-building-2-line',          color: 'text-rose-600'    },
-  gastos_varios: { label: 'Gastos Varios',        icon: 'ri-receipt-line',             color: 'text-amber-600'   },
-  mano_obra:     { label: 'Mano de Obra',         icon: 'ri-user-3-line',              color: 'text-teal-600'    },
-  volumenes:     { label: 'Volúmenes',            icon: 'ri-bar-chart-box-line',       color: 'text-sky-600'     },
-  costos:        { label: 'Costos de Operación',  icon: 'ri-money-dollar-circle-line', color: 'text-violet-600'  },
-  distribucion:  { label: 'Distribución',         icon: 'ri-pie-chart-line',           color: 'text-emerald-600' },
-  areas:         { label: 'Áreas (M² y Racks)',   icon: 'ri-layout-grid-line',         color: 'text-orange-600'  },
+  inversiones:       { label: 'Inversiones',            icon: 'ri-building-2-line',          color: 'text-rose-600'    },
+  gastos_varios:     { label: 'Gastos Varios',           icon: 'ri-receipt-line',             color: 'text-amber-600'   },
+  mano_obra:         { label: 'Mano de Obra',            icon: 'ri-user-3-line',              color: 'text-teal-600'    },
+  volumenes:         { label: 'Volúmenes',               icon: 'ri-bar-chart-box-line',       color: 'text-sky-600'     },
+  costos:            { label: 'Costos de Operación',     icon: 'ri-money-dollar-circle-line', color: 'text-violet-600'  },
+  distribucion:      { label: 'Distribución de Áreas (m²)',icon: 'ri-pie-chart-line',           color: 'text-emerald-600' },
+  distribucion_cubica: { label: 'Distribución Cubica (m³)', icon: 'ri-box-3-line',              color: 'text-cyan-600'    },
+  areas:             { label: 'Áreas (M² y Racks)',       icon: 'ri-layout-grid-line',        color: 'text-orange-600'  },
+  vol_distribucion:  { label: 'Dist. de Volumen (Inbound / Outbound)', icon: 'ri-pie-chart-2-line', color: 'text-teal-600' },
+  factores:          { label: 'Factores',                 icon: 'ri-equalizer-line',           color: 'text-amber-600'   },
 };

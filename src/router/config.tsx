@@ -11,7 +11,9 @@ import CotizacionesPage from '@/pages/cotizaciones/page';
 import ManoObraPage from '@/pages/mano-obra/page';
 import GastosVariosPage from '@/pages/gastos-varios/page';
 import VolumenesPage from '@/pages/volumenes/page';
+import VolDistribucionPage from '@/pages/vol-distribucion/page';
 import ConfiguracionPage from '@/pages/configuracion/page';
+import FactoresPage from '@/pages/factores/page';
 import ProtectedRoute from '@/components/feature/ProtectedRoute';
 
 const routes: RouteObject[] = [
@@ -26,7 +28,9 @@ const routes: RouteObject[] = [
   { path: '/mano-obra', element: <ProtectedRoute moduleKey="mano-obra"><ManoObraPage /></ProtectedRoute> },
   { path: '/gastos-varios', element: <ProtectedRoute moduleKey="gastos-varios"><GastosVariosPage /></ProtectedRoute> },
   { path: '/volumenes', element: <ProtectedRoute moduleKey="volumenes"><VolumenesPage /></ProtectedRoute> },
+  { path: '/vol-distribucion', element: <ProtectedRoute moduleKey="volumenes"><VolDistribucionPage /></ProtectedRoute> },
   { path: '/configuracion', element: <ProtectedRoute moduleKey="configuracion"><ConfiguracionPage /></ProtectedRoute> },
+  { path: '/factores', element: <ProtectedRoute moduleKey="costos"><FactoresPage /></ProtectedRoute> },
   { path: '*', element: <NotFound /> },
 ];
 

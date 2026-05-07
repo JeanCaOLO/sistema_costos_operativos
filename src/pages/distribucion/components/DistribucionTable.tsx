@@ -2,10 +2,13 @@ import type { AreaDistribution } from '../../../types/areas';
 
 type FilterCategoria = 'all' | 'Interior' | 'Exterior';
 
+type DistMode = 'm2' | 'm3';
+
 interface DistribucionTableProps {
   data: AreaDistribution[];
   tipoColors: Record<string, string>;
   filterCategoria: FilterCategoria;
+  distMode: DistMode;
 }
 
 function PercentBar({ value, colorClass }: { value: number; colorClass: string }) {
@@ -52,7 +55,7 @@ function CategoriaBadge({ categoria }: { categoria: string }) {
   );
 }
 
-export default function DistribucionTable({ data, tipoColors, filterCategoria }: DistribucionTableProps) {
+export default function DistribucionTable({ data, tipoColors, filterCategoria, distMode }: DistribucionTableProps) {
   if (data.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 flex flex-col items-center justify-center py-16">
@@ -61,7 +64,11 @@ export default function DistribucionTable({ data, tipoColors, filterCategoria }:
     );
   }
 
-  const maxGlobal = Math.max(...data.map((d) => d.global_distribution_percentage));
+  const isCubic = distMode === 'm3';
+
+  const maxGlobal = isCubic
+    ? Math.max(...data.map((d) => d.global_distribution_cubic_percentage))
+    : Math.max(...data.map((d) => d.global_distribution_percentage));
   const showCategoria = filterCategoria === 'all';
   const catLabel = filterCategoria !== 'all' ? `% de ${filterCategoria}` : '% de Categoría';
 
@@ -75,7 +82,7 @@ export default function DistribucionTable({ data, tipoColors, filterCategoria }:
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Categoría</th>
             )}
             <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Tipo</th>
-            <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Metros²</th>
+            <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">{isCubic ? 'Metros³' : 'Metros²'}</th>
             <th className="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide" style={{ minWidth: 180 }}>% Dentro del Tipo</th>
             <th className="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide" style={{ minWidth: 180 }}>{catLabel}</th>
             <th className="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide" style={{ minWidth: 180 }}>% Global</th>
@@ -83,7 +90,9 @@ export default function DistribucionTable({ data, tipoColors, filterCategoria }:
         </thead>
         <tbody>
           {data.map((row, idx) => {
-            const isTop = row.global_distribution_percentage === maxGlobal && maxGlobal > 0;
+            const isTop = isCubic
+              ? row.global_distribution_cubic_percentage === maxGlobal && maxGlobal > 0
+              : row.global_distribution_percentage === maxGlobal && maxGlobal > 0;
             const barColor = COLOR_BAR[row.area_type_color ?? ''] ?? COLOR_BAR.default;
             const catBarColor = row.categoria === 'Interior' ? 'bg-amber-400' : row.categoria === 'Exterior' ? 'bg-sky-400' : 'bg-slate-300';
 
@@ -114,18 +123,41 @@ export default function DistribucionTable({ data, tipoColors, filterCategoria }:
                   </span>
                 </td>
                 <td className="px-5 py-3.5 text-right">
-                  <span className="text-sm font-semibold text-slate-700 tabular-nums">
-                    {row.square_meters.toLocaleString()} m²
-                  </span>
+                  {isCubic ? (
+                    row.cubic_meters > 0 ? (
+                      <span className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {row.cubic_meters.toLocaleString()} m³
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )
+                  ) : (
+                    row.square_meters > 0 ? (
+                      <span className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {row.square_meters.toLocaleString()} m²
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )
+                  )}
                 </td>
                 <td className="px-5 py-3.5">
-                  <PercentBar value={row.type_distribution_percentage} colorClass={barColor} />
+                  <PercentBar
+                    value={isCubic ? row.type_distribution_cubic_percentage : row.type_distribution_percentage}
+                    colorClass={barColor}
+                  />
                 </td>
                 <td className="px-5 py-3.5">
-                  <PercentBar value={row.category_distribution_percentage} colorClass={catBarColor} />
+                  <PercentBar
+                    value={isCubic ? row.category_distribution_cubic_percentage : row.category_distribution_percentage}
+                    colorClass={catBarColor}
+                  />
                 </td>
                 <td className="px-5 py-3.5">
-                  <PercentBar value={row.global_distribution_percentage} colorClass="bg-emerald-400" />
+                  <PercentBar
+                    value={isCubic ? row.global_distribution_cubic_percentage : row.global_distribution_percentage}
+                    colorClass="bg-emerald-400"
+                  />
                 </td>
               </tr>
             );
@@ -137,12 +169,18 @@ export default function DistribucionTable({ data, tipoColors, filterCategoria }:
               {data.length} área{data.length !== 1 ? 's' : ''}
             </td>
             <td className="px-5 py-3 text-right text-xs font-bold text-slate-700">
-              {data.reduce((s, d) => s + d.square_meters, 0).toLocaleString()} m²
+              {isCubic
+                ? data.reduce((s, d) => s + d.cubic_meters, 0).toLocaleString() + ' m³'
+                : data.reduce((s, d) => s + d.square_meters, 0).toLocaleString() + ' m²'
+              }
             </td>
             <td className="px-5 py-3 text-xs text-slate-400">—</td>
             <td className="px-5 py-3 text-xs text-slate-400">—</td>
             <td className="px-5 py-3 text-xs font-bold text-emerald-700">
-              {data.reduce((s, d) => s + d.global_distribution_percentage, 0).toFixed(2)}%
+              {isCubic
+                ? data.reduce((s, d) => s + d.global_distribution_cubic_percentage, 0).toFixed(2) + '%'
+                : data.reduce((s, d) => s + d.global_distribution_percentage, 0).toFixed(2) + '%'
+              }
             </td>
           </tr>
         </tfoot>

@@ -19,9 +19,6 @@ import {
   BORDER_PROC_DIV,
 } from './CostosTable';
 
-// ─── Simulación column width ──────────────────────────────────────────────────
-export const COL_W_SIM = 200;
-
 // ─── Proceso accent colours (border-left) ────────────────────────────────────
 // Defined as plain CSS hex values so they can be used in inline styles.
 // No Tailwind bg-* classes are ever applied to sticky cells — all backgrounds
@@ -189,9 +186,7 @@ interface CostosTableRowProps {
   formulaCtx?: FormulaContext;
   showTotal?: boolean;
   frozenCols?: number;
-  /** Multiplicador de simulación controlado externamente */
-  simMultiplier?: string;
-  onSimMultiplierChange?: (filaId: string, value: string) => void;
+
 }
 
 interface EditingCell { field: string; value: string }
@@ -203,25 +198,12 @@ export default function CostosTableRow({
   onUpdate, onUpdateCell, onDelete,
   onSaveRowFormula, onClearRowFormula, onAddFilaForProceso,
   saving, formulaCtx, showTotal, frozenCols = 2,
-  simMultiplier: externalSimMultiplier,
-  onSimMultiplierChange,
+
 }: CostosTableRowProps) {
   const [editing, setEditing]               = useState<EditingCell | null>(null);
   const [hovered, setHovered]               = useState(false);
   const [showAreaDropdown, setShowAreaDropdown] = useState(false);
-  const [formulaModalCol, setFormulaModalCol]   = useState<CostoColumna | null>(null);
-  const [internalSimMultiplier, setInternalSimMultiplier] = useState<string>('1');
-  const [editingSim, setEditingSim]             = useState(false);
-
-  // Usar multiplicador externo si se provee, si no usar interno
-  const simMultiplier = externalSimMultiplier ?? internalSimMultiplier;
-  const setSimMultiplier = (value: string) => {
-    if (onSimMultiplierChange) {
-      onSimMultiplierChange(fila.id, value);
-    } else {
-      setInternalSimMultiplier(value);
-    }
-  };
+  const [formulaModalCol, setFormulaModalCol] = useState<CostoColumna | null>(null);
 
   const inputRef            = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
   const subprocesoTriggerRef = useRef<HTMLDivElement | null>(null);
@@ -587,66 +569,6 @@ export default function CostosTableRow({
             </div>
           </td>
         )}
-
-        {/* ── Simulación ───────────────────────────────────────────────────── */}
-        {showTotal && (() => {
-          const rowTotal = getRowTotal(fila, columnas, ctx);
-          const mult = parseFloat(simMultiplier) || 0;
-          const simValue = rowTotal * mult;
-          const simBg = hovered ? 'rgb(255,247,237)' : 'rgb(255,251,245)';
-          return (
-            <td
-              style={{
-                width: COL_W_SIM,
-                minWidth: COL_W_SIM,
-                borderRight: BORDER_ROW,
-                borderBottom: rowBorder,
-                backgroundColor: simBg,
-                padding: '10px 16px',
-              }}
-            >
-              <div className="flex flex-col gap-1">
-                {/* Multiplier input */}
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 flex items-center justify-center flex-shrink-0">
-                    <i className="ri-close-line text-xs text-orange-400" />
-                  </div>
-                  {editingSim ? (
-                    <input
-                      type="number"
-                      value={simMultiplier}
-                      onChange={e => setSimMultiplier(e.target.value)}
-                      onBlur={() => setEditingSim(false)}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditingSim(false); }}
-                      autoFocus
-                      className="w-20 bg-white border border-orange-300 rounded px-2 py-0.5 text-xs focus:outline-none text-right tabular-nums"
-                      step="any"
-                    />
-                  ) : (
-                    <span
-                      className="text-xs text-orange-500 font-semibold tabular-nums cursor-pointer hover:text-orange-700 hover:underline"
-                      title="Clic para editar multiplicador"
-                      onClick={() => setEditingSim(true)}
-                    >
-                      ×{simMultiplier}
-                    </span>
-                  )}
-                </div>
-                {/* Result */}
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 flex items-center justify-center flex-shrink-0">
-                    <i className="ri-bar-chart-2-line text-xs text-orange-400" />
-                  </div>
-                  <span className="text-sm font-bold text-orange-700 tabular-nums">
-                    {new Intl.NumberFormat('en-US', {
-                      style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
-                    }).format(simValue)}
-                  </span>
-                </div>
-              </div>
-            </td>
-          );
-        })()}
 
         {/* ── Spacer ────────────────────────────────────────────────────────── */}
         <td

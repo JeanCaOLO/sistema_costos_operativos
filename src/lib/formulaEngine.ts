@@ -37,6 +37,8 @@ export interface FormulaContext {
   gastosColumnas: GastosVariosColumnaItem[];
   gastosFilas: GastosVariosFilaItem[];
   areaDistribucion: AreaDistribucionItem[];
+  // ── Distribución por metros cúbicos ─────────────────────────────────────
+  areaDistribucionCubic?: AreaDistribucionItem[];
   // extended fields (optional for backward compat)
   manoObraColumnas?: { id: string; nombre: string; tipo: string; is_sensitive?: boolean }[];
   manoObraFilas?: { id: string; valores: Record<string, string | number> }[];
@@ -47,6 +49,10 @@ export interface FormulaContext {
   costosFilas?: { id: string; valores: Record<string, string | number> }[];
   /** Areas with m² and rack data */
   areasData?: AreaDataItem[];
+  /** Distribución de volumen personalizada */
+  volDistribucion?: { id: string; nombre: string; porcentaje: number; porcentaje_inbound: number; porcentaje_outbound: number; categoria: string; is_active: boolean; unidades: number }[];
+  /** Factores registrados */
+  factores?: { id: string; nombre: string; valor: number; descripcion?: string }[];
 }
 
 export const EMPTY_FORMULA_CTX: FormulaContext = {
@@ -54,6 +60,7 @@ export const EMPTY_FORMULA_CTX: FormulaContext = {
   gastosColumnas: [],
   gastosFilas: [],
   areaDistribucion: [],
+  areaDistribucionCubic: [],
   manoObraColumnas: [],
   manoObraFilas: [],
   volumenesColumnas: [],
@@ -61,6 +68,8 @@ export const EMPTY_FORMULA_CTX: FormulaContext = {
   costosColumnas: [],
   costosFilas: [],
   areasData: [],
+  volDistribucion: [],
+  factores: [],
 };
 
 // ── Convert FormulaContext to AllDataSources ──────────────────────────────────
@@ -78,6 +87,8 @@ function toAllDataSources(ctx: FormulaContext): AllDataSources {
     costosFilas: (ctx.costosFilas ?? []) as AllDataSources['costosFilas'],
     areaDistribucion: ctx.areaDistribucion as AreaDistItem[],
     areasData: (ctx.areasData ?? []) as AreaDataItem[],
+    volDistribucion: ctx.volDistribucion ?? [],
+    factores: ctx.factores ?? [],
   };
 }
 

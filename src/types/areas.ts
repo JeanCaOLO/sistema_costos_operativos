@@ -1,3 +1,5 @@
+import type { FormulaConfig } from './costos';
+
 export interface Zona {
   id: string;
   nombre: string;
@@ -31,6 +33,11 @@ export interface Area {
   tiene_automatizacion: boolean;
   metros_automatizacion: number;
   cantidad_racks: number | null;
+  metros_cubicos: number | null;
+  /** Costo total calculado del área (por fórmula o por tipo×m²) */
+  costo_area: number | null;
+  /** Fórmula que calcula el costo del área */
+  costo_area_formula: FormulaConfig | null;
   created_at?: string;
 }
 
@@ -46,10 +53,15 @@ export interface AreaDistribution {
   area_type_color: string | null;
   area_type_icon: string | null;
   square_meters: number;
+  cubic_meters: number;
   categoria: string;
   type_distribution_percentage: number;
   global_distribution_percentage: number;
   category_distribution_percentage: number;
+  // ── Distribución por metros cúbicos ──────────────────────────────────────
+  type_distribution_cubic_percentage: number;
+  global_distribution_cubic_percentage: number;
+  category_distribution_cubic_percentage: number;
   created_at?: string;
 }
 

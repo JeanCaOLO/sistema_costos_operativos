@@ -73,13 +73,15 @@ function ctxToAllDataSources(ctx: FormulaContext): AllDataSources {
     gastosFilas: ctx.gastosFilas as AllDataSources['gastosFilas'],
     manoObraColumnas: ctx.manoObraColumnas ?? [],
     manoObraFilas: (ctx.manoObraFilas ?? []) as AllDataSources['manoObraFilas'],
-    manoObraEmpleados: ctx.manoObraEmpleados ?? [],   // ← fix: variables MO_DIST_* necesitan esto
+    manoObraEmpleados: ctx.manoObraEmpleados ?? [],
     volumenesColumnas: ctx.volumenesColumnas ?? [],
     volumenesFilas: (ctx.volumenesFilas ?? []) as AllDataSources['volumenesFilas'],
     costosColumnas: ctx.costosColumnas ?? [],
     costosFilas: (ctx.costosFilas ?? []) as AllDataSources['costosFilas'],
     areaDistribucion: ctx.areaDistribucion as AllDataSources['areaDistribucion'],
     areasData: (ctx.areasData ?? []) as AllDataSources['areasData'],
+    volDistribucion: (ctx.volDistribucion ?? []) as AllDataSources['volDistribucion'],
+    factores: (ctx.factores ?? []) as AllDataSources['factores'],
   };
 }
 

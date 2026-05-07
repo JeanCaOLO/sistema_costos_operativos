@@ -5,6 +5,9 @@ import TiposAreaTab from './components/TiposAreaTab';
 import ZonasTab from './components/ZonasTab';
 import { supabase, isSupabaseReady } from '../../lib/supabase';
 import type { Area, TipoArea, Zona } from '../../types/areas';
+import type { FormulaContext } from '@/lib/formulaEngine';
+import { EMPTY_FORMULA_CTX, calcularFormula } from '@/lib/formulaEngine';
+import type { InversionRecord } from '@/types/inversion';
 
 type Tab = 'areas' | 'zonas' | 'tipos';
 
@@ -13,6 +16,7 @@ export default function AreasPage() {
   const [areas, setAreas] = useState<Area[]>([]);
   const [tipos, setTipos] = useState<TipoArea[]>([]);
   const [zonas, setZonas] = useState<Zona[]>([]);
+  const [formulaCtx, setFormulaCtx] = useState<FormulaContext>(EMPTY_FORMULA_CTX);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,10 +29,20 @@ export default function AreasPage() {
     setLoading(true);
     setError(null);
     try {
-      const [tiposRes, areasRes, zonasRes] = await Promise.all([
+      const [tiposRes, areasRes, zonasRes, invRes, gastosColRes, gastosFilRes, areaDistRes, moColRes, moFilRes, volColRes, volFilRes, empRes, volDistRes] = await Promise.all([
         supabase.from('tipos_area').select('*').order('nombre'),
         supabase.from('areas').select('*').order('nombre'),
         supabase.from('zona').select('*').order('nombre'),
+        supabase.from('inversiones').select('*').order('created_at'),
+        supabase.from('gastos_varios_columnas').select('id, nombre, tipo').order('orden'),
+        supabase.from('gastos_varios').select('id, area, concepto, parent_id, es_total, tipo_fila, valores'),
+        supabase.from('area_distribution').select('area_name, global_distribution_percentage'),
+        supabase.from('mano_obra_columnas').select('id, nombre, tipo, is_sensitive').order('orden'),
+        supabase.from('mano_obra').select('id, area, valores'),
+        supabase.from('volumenes_columnas').select('id, nombre, tipo').order('orden'),
+        supabase.from('volumenes').select('id, proceso, subproceso, valores'),
+        supabase.from('mano_obra_empleados').select('*').eq('is_active', true),
+        supabase.from('volumen_distribucion').select('id, nombre, porcentaje, porcentaje_inbound, porcentaje_outbound, categoria, is_active, unidades').eq('is_active', true).order('orden'),
       ]);
       if (tiposRes.error) throw tiposRes.error;
       if (areasRes.error) throw areasRes.error;
@@ -36,6 +50,64 @@ export default function AreasPage() {
       setTipos(tiposRes.data ?? []);
       setAreas(areasRes.data ?? []);
       setZonas(zonasRes.data ?? []);
+
+      // Build enriched area distribution with categories
+      const areasWithCat = (areasRes.data ?? []) as Area[];
+      const categoryTotals: Record<string, number> = {};
+      areasWithCat.forEach(a => {
+        const cat = a.categoria ?? 'Sin categoría';
+        categoryTotals[cat] = (categoryTotals[cat] ?? 0) + (a.metros_cuadrados ?? 0);
+      });
+      const enrichedAreaDist = ((areaDistRes.data ?? []) as { area_name: string; global_distribution_percentage: number }[]).map(d => {
+        const match = areasWithCat.find(a => a.nombre === d.area_name);
+        const cat = match?.categoria ?? 'Sin categoría';
+        const areaM2 = match?.metros_cuadrados ?? 0;
+        const catTotal = categoryTotals[cat] ?? 0;
+        const catPct = catTotal > 0 ? (areaM2 / catTotal) * 100 : 0;
+        return {
+          ...d,
+          categoria: cat,
+          category_distribution_percentage: +catPct.toFixed(2),
+        };
+      });
+
+      // Build areasData with costo_area (computed in second pass)
+      const mappedAreasData = areasWithCat.map(a => ({
+        nombre: a.nombre,
+        metros_cuadrados: a.metros_cuadrados ?? 0,
+        cantidad_racks: a.cantidad_racks ?? 0,
+        metros_cubicos: a.metros_cubicos ?? 0,
+        costo_area: 0,
+      }));
+
+      const ctx: FormulaContext = {
+        inversiones: (invRes.data as InversionRecord[]) ?? [],
+        gastosColumnas: (gastosColRes.data ?? []) as FormulaContext['gastosColumnas'],
+        gastosFilas: (gastosFilRes.data ?? []) as FormulaContext['gastosFilas'],
+        areaDistribucion: enrichedAreaDist as FormulaContext['areaDistribucion'],
+        manoObraColumnas: (moColRes.data ?? []) as FormulaContext['manoObraColumnas'],
+        manoObraFilas: (moFilRes.data ?? []) as FormulaContext['manoObraFilas'],
+        manoObraEmpleados: (empRes.data ?? []) as FormulaContext['manoObraEmpleados'],
+        volumenesColumnas: (volColRes.data ?? []) as FormulaContext['volumenesColumnas'],
+        volumenesFilas: (volFilRes.data ?? []) as FormulaContext['volumenesFilas'],
+        costosColumnas: [],
+        costosFilas: [],
+        areasData: mappedAreasData,
+        volDistribucion: (volDistRes.data ?? []) as FormulaContext['volDistribucion'],
+      };
+
+      // Second pass: compute costo_area for each area using its formula
+      for (let i = 0; i < mappedAreasData.length; i++) {
+        const a = mappedAreasData[i];
+        const areaRecord = areasWithCat.find(ar => ar.nombre === a.nombre);
+        if (areaRecord?.costo_area_formula) {
+          mappedAreasData[i].costo_area = calcularFormula(areaRecord.costo_area_formula, ctx, a.nombre);
+        } else {
+          mappedAreasData[i].costo_area = areaRecord?.costo_area ?? 0;
+        }
+      }
+
+      setFormulaCtx(ctx);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error al cargar datos');
     } finally {
@@ -186,6 +258,7 @@ export default function AreasPage() {
           areas={areas}
           tipos={tipos}
           zonas={zonas}
+          formulaCtx={formulaCtx}
           onAdd={addArea}
           onEdit={editArea}
           onDelete={deleteArea}

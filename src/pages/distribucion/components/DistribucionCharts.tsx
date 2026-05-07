@@ -4,10 +4,13 @@ import { TIPO_COLORS } from '../../../types/areas';
 
 type FilterCategoria = 'all' | 'Interior' | 'Exterior';
 
+type DistMode = 'm2' | 'm3';
+
 interface DistribucionChartsProps {
   data: AreaDistribution[];
   tiposUnicos: { tipo: string; color: string | null; icon: string | null }[];
   filterCategoria: FilterCategoria;
+  distMode: DistMode;
 }
 
 const COLOR_PALETTE: Record<string, string> = {
@@ -50,24 +53,30 @@ interface CategoryPanelProps {
   hexColor: string;
   items: AreaDistribution[];
   showTypeBreakdown?: boolean;
+  distMode: DistMode;
 }
 
-function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, showTypeBreakdown }: CategoryPanelProps) {
-  const sorted = [...items].sort((a, b) => b.category_distribution_percentage - a.category_distribution_percentage);
-  const maxCat = Math.max(...sorted.map((d) => d.category_distribution_percentage), 0);
+function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, showTypeBreakdown, distMode }: CategoryPanelProps) {
+  const isCubic = distMode === 'm3';
+  const catPctField: keyof AreaDistribution = isCubic ? 'category_distribution_cubic_percentage' : 'category_distribution_percentage';
+  const typePctField: keyof AreaDistribution = isCubic ? 'type_distribution_cubic_percentage' : 'type_distribution_percentage';
+  const globalPctField: keyof AreaDistribution = isCubic ? 'global_distribution_cubic_percentage' : 'global_distribution_percentage';
+
+  const sorted = [...items].sort((a, b) => (b[catPctField] as number) - (a[catPctField] as number));
+  const maxCat = Math.max(...sorted.map((d) => d[catPctField] as number), 0);
 
   const typeAggregates = useMemo(() => {
-    const map: Record<string, { color: string | null; icon: string | null; m2: number; catPct: number; count: number }> = {};
+    const map: Record<string, { color: string | null; icon: string | null; metric: number; catPct: number; count: number }> = {};
     items.forEach((d) => {
-      if (!map[d.area_type]) map[d.area_type] = { color: d.area_type_color, icon: d.area_type_icon, m2: 0, catPct: 0, count: 0 };
-      map[d.area_type].m2 += d.square_meters;
-      map[d.area_type].catPct += d.category_distribution_percentage;
+      if (!map[d.area_type]) map[d.area_type] = { color: d.area_type_color, icon: d.area_type_icon, metric: 0, catPct: 0, count: 0 };
+      map[d.area_type].metric += isCubic ? d.cubic_meters : d.square_meters;
+      map[d.area_type].catPct += d[catPctField] as number;
       map[d.area_type].count += 1;
     });
     return Object.entries(map)
       .map(([tipo, v]) => ({ tipo, ...v }))
       .sort((a, b) => b.catPct - a.catPct);
-  }, [items]);
+  }, [items, isCubic, catPctField]);
 
   const maxType = Math.max(...typeAggregates.map((t) => t.catPct), 0);
 
@@ -80,6 +89,8 @@ function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, s
     );
   }
 
+  const totalMetric = items.reduce((s, d) => s + (isCubic ? d.cubic_meters : d.square_meters), 0);
+
   return (
     <div className={`bg-white rounded-xl border-2 ${accentColor} p-5`}>
       <div className="flex items-center gap-2 mb-5">
@@ -88,26 +99,24 @@ function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, s
         </div>
         <div>
           <p className="text-sm font-semibold text-slate-800">{label}</p>
-          <p className="text-xs text-slate-400">{items.length} área{items.length !== 1 ? 's' : ''} · {items.reduce((s, d) => s + d.square_meters, 0).toLocaleString()} m²</p>
+          <p className="text-xs text-slate-400">{items.length} área{items.length !== 1 ? 's' : ''} · {totalMetric.toLocaleString()} {isCubic ? 'm³' : 'm²'}</p>
         </div>
       </div>
 
-      {/* Areas within category */}
       <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">% dentro de {label}</p>
       <div className="space-y-2.5 mb-5">
         {sorted.map((row) => (
           <HorizontalBar
             key={row.id}
             label={row.area_name}
-            subLabel={`${row.square_meters.toLocaleString()} m²`}
-            value={row.category_distribution_percentage}
+            subLabel={`${isCubic ? row.cubic_meters.toLocaleString() + ' m³' : row.square_meters.toLocaleString() + ' m²'}`}
+            value={row[catPctField] as number}
             max={maxCat}
             hexColor={hexColor}
           />
         ))}
       </div>
 
-      {/* Type breakdown within category */}
       {showTypeBreakdown && typeAggregates.length > 1 && (
         <>
           <div className="border-t border-slate-100 my-4" />
@@ -117,7 +126,7 @@ function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, s
               <HorizontalBar
                 key={t.tipo}
                 label={t.tipo}
-                subLabel={`${t.count} área${t.count !== 1 ? 's' : ''} · ${t.m2.toLocaleString()} m²`}
+                subLabel={`${t.count} área${t.count !== 1 ? 's' : ''} · ${t.metric.toLocaleString()} ${isCubic ? 'm³' : 'm²'}`}
                 value={t.catPct}
                 max={maxType}
                 hexColor={COLOR_PALETTE[t.color ?? ''] ?? COLOR_PALETTE.default}
@@ -130,7 +139,11 @@ function CategoryPanel({ label, icon, iconColor, accentColor, hexColor, items, s
   );
 }
 
-export default function DistribucionCharts({ data, tiposUnicos, filterCategoria }: DistribucionChartsProps) {
+export default function DistribucionCharts({ data, tiposUnicos, filterCategoria, distMode }: DistribucionChartsProps) {
+  const isCubic = distMode === 'm3';
+  const catPctField: keyof AreaDistribution = isCubic ? 'category_distribution_cubic_percentage' : 'category_distribution_percentage';
+  const globalPctField: keyof AreaDistribution = isCubic ? 'global_distribution_cubic_percentage' : 'global_distribution_percentage';
+
   const interiorData = useMemo(() => data.filter((d) => d.categoria === 'Interior'), [data]);
   const exteriorData = useMemo(() => data.filter((d) => d.categoria === 'Exterior'), [data]);
 
@@ -139,15 +152,15 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
       const items = data.filter((d) => d.area_type === t.tipo);
       return {
         ...t,
-        totalPct: items.reduce((s, d) => s + d.global_distribution_percentage, 0),
-        totalM2: items.reduce((s, d) => s + d.square_meters, 0),
+        totalPct: items.reduce((s, d) => s + (d[globalPctField] as number), 0),
+        totalMetric: items.reduce((s, d) => s + (isCubic ? d.cubic_meters : d.square_meters), 0),
         count: items.length,
       };
     }).sort((a, b) => b.totalPct - a.totalPct),
-  [tiposUnicos, data]);
+  [tiposUnicos, data, isCubic, globalPctField]);
   const maxTypePct = Math.max(...typeAggregates.map((t) => t.totalPct), 0);
 
-  const maxGlobal = Math.max(...data.map((d) => d.global_distribution_percentage), 0);
+  const maxGlobal = Math.max(...data.map((d) => d[globalPctField] as number), 0);
 
   if (data.length === 0) {
     return (
@@ -157,7 +170,6 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
     );
   }
 
-  // Filtered by category: show full analysis for that category
   if (filterCategoria !== 'all') {
     return (
       <div className="grid grid-cols-2 gap-5">
@@ -169,9 +181,9 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
           hexColor={filterCategoria === 'Interior' ? '#f59e0b' : '#0ea5e9'}
           items={data}
           showTypeBreakdown
+          distMode={distMode}
         />
         <div className="space-y-5">
-          {/* Global distribution for this filtered set */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <div className="flex items-center gap-2 mb-5">
               <div className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-50">
@@ -183,12 +195,12 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
               </div>
             </div>
             <div className="space-y-3">
-              {[...data].sort((a, b) => b.global_distribution_percentage - a.global_distribution_percentage).map((row) => (
+              {[...data].sort((a, b) => (b[globalPctField] as number) - (a[globalPctField] as number)).map((row) => (
                 <HorizontalBar
                   key={row.id}
                   label={row.area_name}
-                  subLabel={`${row.square_meters.toLocaleString()} m²`}
-                  value={row.global_distribution_percentage}
+                  subLabel={`${isCubic ? row.cubic_meters.toLocaleString() + ' m³' : row.square_meters.toLocaleString() + ' m²'}`}
+                  value={row[globalPctField] as number}
                   max={maxGlobal}
                   hexColor="#10b981"
                 />
@@ -196,7 +208,6 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
             </div>
           </div>
 
-          {/* Type aggregates */}
           {typeAggregates.length > 0 && (
             <div className="bg-white rounded-xl border border-slate-200 p-5">
               <div className="flex items-center gap-2 mb-5">
@@ -219,7 +230,7 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
                     </div>
                     <HorizontalBar
                       label={`${t.count} área${t.count !== 1 ? 's' : ''}`}
-                      subLabel={`${t.totalM2.toLocaleString()} m²`}
+                      subLabel={`${t.totalMetric.toLocaleString()} ${isCubic ? 'm³' : 'm²'}`}
                       value={t.totalPct}
                       max={maxTypePct}
                       hexColor={COLOR_PALETTE[t.color ?? ''] ?? COLOR_PALETTE.default}
@@ -234,10 +245,8 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
     );
   }
 
-  // All: show side-by-side Interior vs Exterior + global
   return (
     <div className="space-y-5">
-      {/* Side by side category panels */}
       <div className="grid grid-cols-2 gap-5">
         <CategoryPanel
           label="Interior"
@@ -247,6 +256,7 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
           hexColor="#f59e0b"
           items={interiorData}
           showTypeBreakdown
+          distMode={distMode}
         />
         <CategoryPanel
           label="Exterior"
@@ -256,10 +266,10 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
           hexColor="#0ea5e9"
           items={exteriorData}
           showTypeBreakdown
+          distMode={distMode}
         />
       </div>
 
-      {/* Global distribution across all */}
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="flex items-center gap-2 mb-5">
           <div className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-50">
@@ -271,15 +281,15 @@ export default function DistribucionCharts({ data, tiposUnicos, filterCategoria 
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-10 gap-y-3">
-          {[...data].sort((a, b) => b.global_distribution_percentage - a.global_distribution_percentage).map((row) => {
-            const isInterior = row.categoria === 'Interior';
-            const hexColor = isInterior ? '#f59e0b' : row.categoria === 'Exterior' ? '#0ea5e9' : '#94a3b8';
+          {[...data].sort((a, b) => (b[globalPctField] as number) - (a[globalPctField] as number)).map((row) => {
+            const isInteriorRow = row.categoria === 'Interior';
+            const hexColor = isInteriorRow ? '#f59e0b' : row.categoria === 'Exterior' ? '#0ea5e9' : '#94a3b8';
             return (
               <HorizontalBar
                 key={row.id}
                 label={row.area_name}
-                subLabel={`${row.categoria} · ${row.square_meters.toLocaleString()} m²`}
-                value={row.global_distribution_percentage}
+                subLabel={`${row.categoria} · ${isCubic ? row.cubic_meters.toLocaleString() + ' m³' : row.square_meters.toLocaleString() + ' m²'}`}
+                value={row[globalPctField] as number}
                 max={maxGlobal}
                 hexColor={hexColor}
               />
